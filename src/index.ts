@@ -1,22 +1,20 @@
 #!/usr/bin/env node
 // src/index.ts
-// gscli entrypoint. Commander handles `setup`, `init`, `uninstall`, `doctor`.
-// A query (or any unknown first arg) falls through to the legacy parseCli
-// so every historic search flag keeps working.
+// gscli entrypoint. Pure Commander — `setup`, `init`, `uninstall`, `doctor`,
+// `search` (default). All search flags live in src/cli/options.ts and are
+// wired into the `search` subcommand.
 
 import { Command } from 'commander';
+import pc from 'picocolors';
 import { runSetup } from './commands/setup.js';
 import { runSearch } from './commands/search.js';
 import { runDoctor } from './commands/doctor.js';
 import { runInit } from './commands/init.js';
 import { runUninstall } from './commands/uninstall.js';
-import { printHelp as printSearchHelp } from './cli/index.js';
+import { applySearchOptions, optsToConfig, SEARCH_OPTIONS } from './cli/options.js';
 import { VERSION } from './utils/version.js';
 
-const COMMANDER_TOKENS = new Set([
-  'setup', 'init', 'uninstall', 'doctor',
-  'help', '--help', '-h', '--version', '-v',
-]);
+const KNOWN_COMMANDS = new Set(['setup', 'init', 'uninstall', 'doctor', 'search', 'help']);
 
 function printRootHelp(): void {
   process.stdout.write(`
@@ -24,21 +22,19 @@ gscli ${VERSION} — Google Search CLI
 
 Usage:
   gscli setup [options]              Launch Chrome debug window + sign into Google
-  gscli init [options]               Wire gscli into the current project's agent rules
+  gscli init [options]               Wire gscli into the current project
   gscli uninstall [options]          Reverse of init
   gscli doctor                       Verify Chrome, agent-browser, CDP, paths
-  gscli [search] [query] [options]   Run a search (default command)
+  gscli [search] <query> [options]   Run a search (default command)
   gscli --version / --help
 
 Commands:
-  setup       One-time Chrome login. Uses a separate profile — personal Chrome
-              stays open and untouched. Supports --force / --reuse.
-  init        Detects agent rule files (CLAUDE.md, AGENTS.md, GEMINI.md) and
-              installs gscli-* skills + injects a rules section.
-  uninstall   Removes the rules section and gscli-* skills.
-  doctor      Health check.
+  setup       One-time Chrome login (separate profile — personal Chrome stays)
+  init        Detects CLAUDE.md / AGENTS.md / GEMINI.md and installs skills
+  uninstall   Removes the rules section and gscli-* skills
+  doctor      Health check
   search      Run a Google search (regular or AI Mode), with history, cache,
-              merge-history and retry support.
+              merge-history and retry support
 
 Setup options:
   --port <n>            CDP port (default: 9222)
@@ -53,10 +49,28 @@ Init / uninstall options:
 
 Search options (use after a query, or with 'search' subcommand):
 `);
-  printSearchHelp();
+  const pad = Math.max(...SEARCH_OPTIONS.map((o) => o.flags.length)) + 2;
+  for (const o of SEARCH_OPTIONS) {
+    const def = o.defaultValue !== undefined && !o.collect && !(o.flags.startsWith('--no-')) && o.flags.includes('<')
+      ? pc.dim(`  (default: ${String(o.defaultValue)})`)
+      : '';
+    process.stdout.write(`  ${o.flags.padEnd(pad)}${o.description}${def}\n`);
+  }
+  process.stdout.write(`\nExamples:\n`);
+  process.stdout.write(`  gscli "agent-browser cdp mode"\n`);
+  process.stdout.write(`  gscli "what is python" --ai -c -f "give code examples"\n`);
+  process.stdout.write(`  gscli --merge-history --merge-limit 5\n`);
+  process.stdout.write(`\n`);
 }
 
-async function dispatch(argv: string[]): Promise<number> {
+// Rewrite the legacy `--ai` alias to `--ai-mode` so commander only needs to
+// know one canonical flag name.
+function normalizeAlias(argv: string[]): string[] {
+  return argv.map((a) => (a === '--ai' ? '--ai-mode' : a));
+}
+
+async function dispatch(rawArgv: string[]): Promise<number> {
+  const argv = normalizeAlias(rawArgv);
   const first = argv[2];
 
   if (first === '--help' || first === '-h' || first === 'help') {
@@ -68,19 +82,20 @@ async function dispatch(argv: string[]): Promise<number> {
     return 0;
   }
 
-  // Implicit search: no first arg, or first arg is a query / option for search.
-  if (!first || (!COMMANDER_TOKENS.has(first) && first !== 'search')) {
-    return runSearch(argv.slice(2));
-  }
-  if (first === 'search') {
-    return runSearch(argv.slice(3));
+  // Implicit search: prepend 'search' so commander routes to that subcommand.
+  if (first && !KNOWN_COMMANDS.has(first)) {
+    argv.splice(2, 0, 'search');
   }
 
   const program = new Command();
   program
     .name('gscli')
     .description('Google Search CLI — SERP extraction via CDP, AI Mode, history, cache.')
-    .version(VERSION);
+    .version(VERSION)
+    .exitOverride((err) => {
+      // commander throws CommanderError for help/version — let it bubble.
+      throw err;
+    });
 
   program
     .command('setup')
@@ -110,16 +125,23 @@ async function dispatch(argv: string[]): Promise<number> {
     .description('Health check: Chrome, agent-browser, CDP, paths')
     .action(async () => { process.exitCode = await runDoctor(); });
 
-  program
-    .command('search [query...]')
-    .description('Run a Google search (default — same as `gscli <query>`)')
-    .allowUnknownOption(true)
-    .helpOption(false)
-    .action(() => {
-      // Unreachable: routed manually above.
-    });
+  const searchCmd = program
+    .command('search [query]')
+    .description('Run a Google search (default — same as `gscli <query>`)');
+  applySearchOptions(searchCmd);
+  searchCmd.action(async (positionalQuery: string | undefined, opts: Record<string, unknown>) => {
+    const config = optsToConfig(positionalQuery, opts);
+    process.exitCode = await runSearch(config);
+  });
 
-  await program.parseAsync(argv);
+  try {
+    await program.parseAsync(argv);
+  } catch (err: unknown) {
+    // commander uses err.code === 'commander.helpDisplayed' / 'commander.version'
+    const code = (err as { code?: string }).code;
+    if (code === 'commander.helpDisplayed' || code === 'commander.version') return 0;
+    throw err;
+  }
   return typeof process.exitCode === 'number' ? process.exitCode : 0;
 }
 

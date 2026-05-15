@@ -1,8 +1,8 @@
 // src/commands/search.ts
-// Search orchestration: parses CLI flags, applies merge-history/cache shortcuts,
-// acquires per-port lock and runs performSearch with optional retry.
+// Search orchestration: applies merge-history/cache shortcuts, acquires the
+// per-port lock, and runs performSearch with optional retry. Receives a fully
+// resolved Config — option parsing happens in src/cli/options.ts via Commander.
 
-import { parseCli } from '../cli/index.js';
 import { performSearch } from '../search/index.js';
 import { Config } from '../config/index.js';
 import { lookupHistory, mergeRecentHistory } from '../history/index.js';
@@ -11,7 +11,6 @@ import { acquireLock } from '../lock.js';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-// Exit codes consideredos retriaveis: 1 (error), 2 (blocked), 3 (inconclusive)
 const RETRIABLE_CODES = new Set<number>([1, 2, 3]);
 
 async function performSearchWithRetry(config: Config): Promise<number> {
@@ -27,15 +26,15 @@ async function performSearchWithRetry(config: Config): Promise<number> {
       if (code === 0) return 0;
       lastCode = code;
       if (!RETRIABLE_CODES.has(code)) return code;
-      process.stderr.write(`[google-search] attempt ${attempt + 1}/${max + 1} returned code ${code}\n`);
+      process.stderr.write(`[gscli] attempt ${attempt + 1}/${max + 1} returned code ${code}\n`);
     } catch (error: unknown) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`[google-search] attempt ${attempt + 1}/${max + 1} threw: ${message}\n`);
+      process.stderr.write(`[gscli] attempt ${attempt + 1}/${max + 1} threw: ${message}\n`);
     }
     if (attempt < max) {
       const delay = Math.min(30000, 1500 * Math.pow(2, attempt));
-      process.stderr.write(`[google-search] backoff ${delay}ms before retry\n`);
+      process.stderr.write(`[gscli] backoff ${delay}ms before retry\n`);
       await sleep(delay);
     }
   }
@@ -43,15 +42,13 @@ async function performSearchWithRetry(config: Config): Promise<number> {
   return lastCode;
 }
 
-export async function runSearch(argv: string[]): Promise<number> {
-  const config: Config = parseCli(argv);
-
+export async function runSearch(config: Config): Promise<number> {
   if (config.mergeHistory) {
     const { entries, merged } = mergeRecentHistory(config, {
       limit: config.mergeLimit,
       ttlSeconds: config.mergeTtlSeconds,
     });
-    process.stderr.write(`[google-search] merged ${entries.length} searches -> ${merged.length} unique links\n`);
+    process.stderr.write(`[gscli] merged ${entries.length} searches -> ${merged.length} unique links\n`);
     const payload = {
       status: 'ok' as const,
       mode: 'merge-history',
@@ -65,7 +62,7 @@ export async function runSearch(argv: string[]): Promise<number> {
   if (config.useCache) {
     const hit = lookupHistory(config, config.searchQuery, config.cacheTtlSeconds);
     if (hit) {
-      process.stderr.write(`[google-search] cache hit for "${config.searchQuery}" (${hit.ts})\n`);
+      process.stderr.write(`[gscli] cache hit for "${config.searchQuery}" (${hit.ts})\n`);
       const linksOnly = hit.links.map((l) => ({ title: l.title, url: l.url, snippet: l.snippet }));
       const payload = createPayload('ok', hit.query, hit.title, linksOnly, hit.cdpPort);
       emitSearchResult(config, payload);
@@ -82,7 +79,7 @@ export async function runSearch(argv: string[]): Promise<number> {
       });
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
-      process.stderr.write(`[google-search] ERROR: ${message}\n`);
+      process.stderr.write(`[gscli] ERROR: ${message}\n`);
       return 1;
     }
   }
@@ -91,7 +88,7 @@ export async function runSearch(argv: string[]): Promise<number> {
     return await performSearchWithRetry(config);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.stack || error.message : String(error);
-    process.stderr.write(`[google-search] ERROR: ${message}\n`);
+    process.stderr.write(`[gscli] ERROR: ${message}\n`);
     return 1;
   } finally {
     if (releaseLock) releaseLock();
