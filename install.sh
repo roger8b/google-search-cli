@@ -60,7 +60,7 @@ if command -v agent-browser >/dev/null 2>&1; then
   ok "agent-browser found at $(command -v agent-browser)"
 else
   warn "agent-browser not on PATH — gscli search will fail until it is installed"
-  dim "install: see https://github.com/roger8b/agent-browser  (or set AGENT_BROWSER_BIN)"
+  dim "install: see https://agent-browser.dev/  (or set AGENT_BROWSER_BIN)"
 fi
 
 # install / sync

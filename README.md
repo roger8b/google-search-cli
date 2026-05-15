@@ -14,7 +14,7 @@ A TypeScript CLI that drives a logged-in Chrome over CDP and extracts Google SER
 
 You never click anything yourself; you never copy URLs out of a SERP again. The agent runs `gscli "<query>"`, gets a JSON list of links, and feeds them into whatever pipeline you have.
 
-> The browser-as-API pattern is inspired by [agent-browser](https://github.com/roger8b/agent-browser), which `gscli` builds on for CDP automation.
+> The browser-as-API pattern is inspired by [agent-browser](https://agent-browser.dev/), which `gscli` builds on for CDP automation.
 
 ---
 
@@ -79,7 +79,7 @@ npm install && npm run build && npm link
 gscli setup
 ```
 
-**Prerequisites:** Node ≥18 and the [`agent-browser`](https://github.com/roger8b/agent-browser) binary on `PATH`. The installer warns when it's missing.
+**Prerequisites:** Node ≥18 and the [`agent-browser`](https://agent-browser.dev/) binary on `PATH`. The installer warns when it's missing.
 
 ---
 
