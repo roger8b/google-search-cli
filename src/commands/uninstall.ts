@@ -1,100 +1,154 @@
 // src/commands/uninstall.ts
-// Reverse of `gscli init`.
-//
-// Project mode (default): strip the marker-delimited section from CLAUDE.md /
-// AGENTS.md / GEMINI.md (whichever are present in the project) and remove the
-// gscli-* skills from each per-agent skillsDir.
-//
-// Global mode (--global): remove gscli-* skills from $HOME/<agent>/skills for
-// every known agent. Never touches rule files.
+// Reverse of `gscli init`. Walks every agent's project skillsDir (when scope
+// includes "local") and globalSkillsDir (when scope includes "global"),
+// removes all gscli-* skills, and strips the marker-delimited section from
+// every detected rule file. Also deletes `.gscli.json` when removing locally.
 
-import fs from 'node:fs';
 import path from 'node:path';
+import fs from 'fs-extra';
 import pc from 'picocolors';
-import { AGENTS, type AgentConfig, GLOBAL_AGENT_IDS, detectInstalledAgents, globalSkillsDir } from '../utils/agents.js';
+import { AGENTS, type AgentId, detectInstalledAgents } from '../utils/agents.js';
 
 export interface UninstallOpts {
   cwd?: string;
   agent?: string;
-  global?: boolean;
+  scope?: 'local' | 'global' | 'both';
+  yes?: boolean;
 }
 
-const MARKER_START = '<!-- gscli-start -->';
-const MARKER_END = '<!-- gscli-end -->';
+type Scope = 'local' | 'global' | 'both';
+
+const GSCLI_START = '<!-- gscli-start -->';
+const GSCLI_END = '<!-- gscli-end -->';
 
 export async function runUninstall(opts: UninstallOpts = {}): Promise<number> {
-  return opts.global ? runGlobal(opts) : runProject(opts);
-}
+  const target = path.resolve(opts.cwd ?? '.');
+  const scope: Scope = opts.scope ?? 'local';
 
-async function runProject(opts: UninstallOpts): Promise<number> {
-  const cwd = path.resolve(opts.cwd ?? process.cwd());
-
-  const agents: AgentConfig[] = opts.agent
-    ? (AGENTS[opts.agent] ? [AGENTS[opts.agent]] : [])
-    : detectInstalledAgents(cwd);
-
-  if (agents.length === 0) {
-    console.error(pc.yellow('! nothing to uninstall (no agents detected)'));
+  // Decide which agents to act on. If --agent given, use only that one;
+  // otherwise look at the manifest, the project rule files, and the
+  // global home directories.
+  const agentIds = await resolveAgents(target, opts.agent, scope);
+  if (agentIds.length === 0) {
+    console.error(pc.yellow('! no gscli installations found to remove'));
     return 0;
   }
 
-  console.error(pc.cyan('▸ gscli uninstall'));
-  console.error(`  project: ${cwd}`);
-  console.error('');
+  console.log(pc.dim(`project: ${target}`));
+  console.log(pc.dim(`scope:   ${scope}`));
+  console.log(pc.dim(`agents:  ${agentIds.map((id) => AGENTS[id]?.displayName ?? id).join(', ')}`));
+  console.log();
 
-  for (const agent of agents) {
-    removeGscliSkills(path.join(cwd, agent.skillsDir), agent.skillsDir);
-    const rulePath = path.join(cwd, agent.ruleFile);
-    cleanRuleFile(rulePath, agent.ruleFile);
-  }
+  // Track shared rule files so we don't strip the same file twice.
+  const cleanedRuleFiles = new Set<string>();
 
-  console.error('');
-  console.error(pc.green('gscli unwired from project.'));
-  return 0;
-}
+  for (const id of agentIds) {
+    const def = AGENTS[id];
+    if (!def) continue;
 
-async function runGlobal(opts: UninstallOpts): Promise<number> {
-  const agents: AgentConfig[] = opts.agent
-    ? (AGENTS[opts.agent] ? [AGENTS[opts.agent]] : [])
-    : GLOBAL_AGENT_IDS.map((id) => AGENTS[id]);
+    const dests: string[] = [];
+    if (scope === 'local' || scope === 'both') dests.push(path.join(target, def.skillsDir));
+    if (scope === 'global' || scope === 'both') dests.push(def.globalSkillsDir);
 
-  if (agents.length === 0) {
-    console.error(pc.red(`✗ unknown agent: ${opts.agent}`));
-    return 1;
-  }
+    for (const dest of dests) {
+      const removed = await removeGscliSkills(dest);
+      if (removed > 0) {
+        const rel = path.relative(target, dest);
+        console.log(pc.green(`  ✓ removed ${removed} gscli skill(s) from ${rel || dest}`));
+      }
+    }
 
-  console.error(pc.cyan('▸ gscli uninstall --global'));
-  console.error('');
-
-  for (const agent of agents) {
-    const dst = globalSkillsDir(agent);
-    removeGscliSkills(dst, dst);
-  }
-
-  console.error('');
-  console.error(pc.green('gscli global skills removed.'));
-  return 0;
-}
-
-function removeGscliSkills(skillsRoot: string, displayLabel: string): void {
-  if (!fs.existsSync(skillsRoot)) return;
-  for (const entry of fs.readdirSync(skillsRoot)) {
-    if (entry.startsWith('gscli-')) {
-      fs.rmSync(path.join(skillsRoot, entry), { recursive: true, force: true });
-      console.error(pc.green(`  ✓ removed ${path.join(displayLabel, entry)}`));
+    if (scope === 'local' || scope === 'both') {
+      const rulePath = path.join(target, def.ruleFile);
+      if (!cleanedRuleFiles.has(rulePath)) {
+        cleanedRuleFiles.add(rulePath);
+        if (await cleanRuleFile(rulePath)) {
+          console.log(pc.green(`  ✓ cleaned ${path.relative(target, rulePath)}`));
+        }
+      }
     }
   }
+
+  // Drop the manifest only when fully uninstalling locally.
+  if (scope === 'local' || scope === 'both') {
+    const configPath = path.join(target, '.gscli.json');
+    if (fs.existsSync(configPath)) {
+      await fs.remove(configPath);
+      console.log(pc.green('  ✓ removed .gscli.json'));
+    }
+  }
+
+  console.log(pc.green('\n✓ gscli uninstalled.'));
+  return 0;
 }
 
-function cleanRuleFile(rulePath: string, displayName: string): void {
-  if (!fs.existsSync(rulePath)) return;
-  const content = fs.readFileSync(rulePath, 'utf8');
-  const startIdx = content.indexOf(MARKER_START);
-  const endIdx = content.indexOf(MARKER_END);
-  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return;
+async function resolveAgents(target: string, agentFlag: string | undefined, scope: Scope): Promise<AgentId[]> {
+  if (agentFlag) {
+    return AGENTS[agentFlag] ? [agentFlag] : [];
+  }
 
-  const before = content.slice(0, startIdx).replace(/\n+$/, '\n');
-  const after = content.slice(endIdx + MARKER_END.length).replace(/^\n+/, '\n');
-  fs.writeFileSync(rulePath, before + after);
-  console.error(pc.green(`  ✓ cleaned ${displayName}`));
+  const ids = new Set<AgentId>();
+
+  // From manifest.
+  const configPath = path.join(target, '.gscli.json');
+  if (fs.existsSync(configPath)) {
+    try {
+      const manifest = await fs.readJson(configPath) as { agents?: AgentId[] };
+      for (const a of manifest.agents ?? []) ids.add(a);
+    } catch { /* ignore malformed */ }
+  }
+
+  // From local rule files / skill dirs.
+  if (scope === 'local' || scope === 'both') {
+    for (const [id, def] of Object.entries(AGENTS)) {
+      const rulePath = path.join(target, def.ruleFile);
+      const skillsPath = path.join(target, def.skillsDir);
+      if (fs.existsSync(rulePath) && fs.readFileSync(rulePath, 'utf8').includes(GSCLI_START)) ids.add(id);
+      if (await hasGscliSkills(skillsPath)) ids.add(id);
+    }
+  }
+
+  // From global skill dirs of detected agents.
+  if (scope === 'global' || scope === 'both') {
+    for (const id of detectInstalledAgents()) {
+      const def = AGENTS[id];
+      if (def && await hasGscliSkills(def.globalSkillsDir)) ids.add(id);
+    }
+  }
+
+  return Array.from(ids);
+}
+
+async function hasGscliSkills(dir: string): Promise<boolean> {
+  if (!fs.existsSync(dir)) return false;
+  try {
+    const entries = await fs.readdir(dir);
+    return entries.some((e) => e.startsWith('gscli-'));
+  } catch { return false; }
+}
+
+async function removeGscliSkills(dir: string): Promise<number> {
+  if (!fs.existsSync(dir)) return 0;
+  let removed = 0;
+  try {
+    const entries = await fs.readdir(dir);
+    for (const e of entries) {
+      if (!e.startsWith('gscli-')) continue;
+      await fs.remove(path.join(dir, e));
+      removed++;
+    }
+  } catch { /* ignore */ }
+  return removed;
+}
+
+async function cleanRuleFile(rulePath: string): Promise<boolean> {
+  if (!fs.existsSync(rulePath)) return false;
+  const content = await fs.readFile(rulePath, 'utf8');
+  if (!content.includes(GSCLI_START)) return false;
+  const stripped = content.replace(
+    new RegExp(`\\n?${GSCLI_START}[\\s\\S]*?${GSCLI_END}\\n?`, 'm'),
+    '',
+  );
+  await fs.writeFile(rulePath, stripped);
+  return true;
 }

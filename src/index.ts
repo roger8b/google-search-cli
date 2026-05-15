@@ -43,11 +43,17 @@ Setup options:
   --force               Kill any Chrome on the port/profile, then relaunch
   --reuse               Reuse existing CDP if already up; skip launch
 
-Init / uninstall options:
-  --agent <id>          Force a specific agent (claude-code | codex | gemini)
-  --force               Overwrite existing skills on init
-  --global              User-wide skills only (~/.claude/skills, ~/.agents/skills, ~/.gemini/skills);
-                        does not create or modify project rule files
+Init options (interactive by default; pass -y for non-interactive):
+  --scope <local|global|both>   Where to install skills
+  --method <symlink|copy>       Installation method (symlink default)
+  --update                      Re-sync existing skills without asking
+  --show-all                    Show every supported agent (not just detected)
+  --force                       Overwrite even if a gscli section is already present
+  -y, --yes                     Non-interactive (detected agents, local, symlink)
+
+Uninstall options:
+  --agent <id>                  Force a specific agent
+  --scope <local|global|both>   Where to remove from (default: local)
 
 Search options (use after a query, or with 'search' subcommand):
 `);
@@ -111,17 +117,21 @@ async function dispatch(rawArgv: string[]): Promise<number> {
 
   program
     .command('init')
-    .description('Wire gscli into the current project (skills + rule section)')
-    .option('--agent <id>', 'Force a specific agent: claude-code | codex | gemini')
-    .option('--force', 'Overwrite existing skill directories')
-    .option('--global', 'Install skills user-wide (~/.claude/skills, etc.); do not touch rule files')
+    .description('Wire gscli into the current project (skills + rule section, interactive)')
+    .option('--scope <local|global|both>', 'Where to install skills (default: ask)')
+    .option('--method <symlink|copy>', 'Skills installation method (default: ask; symlink recommended)')
+    .option('--update', 'Re-sync existing skills without asking')
+    .option('--show-all', 'Show every supported agent (default: only detected)')
+    .option('--force', 'Overwrite even if a gscli section is already present')
+    .option('-y, --yes', 'Non-interactive (detected agents, local scope, symlink method)')
     .action(async (opts) => { process.exitCode = await runInit(opts); });
 
   program
     .command('uninstall')
-    .description('Remove gscli rule section + skills from the current project')
-    .option('--agent <id>', 'Force a specific agent')
-    .option('--global', 'Remove user-wide skills installed with `init --global`')
+    .description('Remove gscli skills + rule section from the current project (or --scope global)')
+    .option('--agent <id>', 'Force a specific agent id')
+    .option('--scope <local|global|both>', 'Where to remove from (default: local)')
+    .option('-y, --yes', 'Skip confirmations')
     .action(async (opts) => { process.exitCode = await runUninstall(opts); });
 
   program
