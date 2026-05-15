@@ -1,17 +1,18 @@
 ---
 name: gscli-history
-description: Use this skill when the user wants to review past searches, merge results across multiple queries, or work with `gscli`'s persistent search history. Trigger phrases include "what did we search", "merge results", "all links about X", "history of my searches".
+description: Use this skill when the user wants to review past searches, merge results across multiple recent queries, or reuse a cached result for an identical query to skip the browser. Trigger phrases include "what did we search", "merge results", "all links about X", "history of my searches", "same query again use cache", "without re-running the browser".
 ---
 
 # gscli-history
 
-`gscli` appends every successful search to `~/.gscli/history/searches.jsonl` (one entry per line). The history is the source of truth for both cache hits and cross-search merges.
+`gscli` appends every successful search to `~/.gscli/history/searches.jsonl` (one entry per line). The history is the source of truth for both **cache hits** (single-query reuse) and **merge** (cross-search union of links).
 
 ## When to use
 
-- User asks what they searched recently.
-- User wants the union of links from multiple recent searches, deduped.
-- User asks for citations / link lists from prior research without re-running the browser.
+- User asks what they searched recently or wants to see prior queries.
+- User wants the union of links from several recent searches, deduped.
+- User asks for citations / link lists from prior research without re-running Chrome.
+- User repeats an identical query and wants the cached result.
 
 ## Merge multiple recent searches
 
@@ -31,14 +32,23 @@ If a matching entry exists within `--cache-ttl` seconds, returns it without open
 
 ## Read history directly
 
-The history is plain JSONL — safe to grep:
+The history is plain JSONL — safe to grep / pipe through `jq`:
 
 ```bash
+# Last 20 queries
 tail -n 20 ~/.gscli/history/searches.jsonl | jq -r .query
-grep -i "python" ~/.gscli/history/searches.jsonl | jq '.links[].url'
+
+# All URLs ever returned for queries containing "python"
+grep -i "python" ~/.gscli/history/searches.jsonl | jq -r '.links[].url'
+
+# Searches from the last hour
+jq -c "select(.ts > \"$(date -u -v -1H +%Y-%m-%dT%H:%M:%SZ)\")" ~/.gscli/history/searches.jsonl
+
+# All ai-mode searches
+jq -c 'select(.mode == "ai-mode")' ~/.gscli/history/searches.jsonl
 ```
 
 ## Hard rules
 
-- **Never edit `searches.jsonl` by hand.** It's append-only; reordering or rewriting entries breaks cache/merge.
+- **Never edit `searches.jsonl` by hand.** It's append-only; reordering or rewriting entries breaks cache and merge.
 - **Disable history with `--no-history` only for one-off / sensitive queries.** Otherwise leave it on — it makes follow-ups cheap.
