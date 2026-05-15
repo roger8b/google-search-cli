@@ -46,6 +46,8 @@ Setup options:
 Init / uninstall options:
   --agent <id>          Force a specific agent (claude-code | codex | gemini)
   --force               Overwrite existing skills on init
+  --global              User-wide skills only (~/.claude/skills, ~/.agents/skills, ~/.gemini/skills);
+                        does not create or modify project rule files
 
 Search options (use after a query, or with 'search' subcommand):
 `);
@@ -112,12 +114,14 @@ async function dispatch(rawArgv: string[]): Promise<number> {
     .description('Wire gscli into the current project (skills + rule section)')
     .option('--agent <id>', 'Force a specific agent: claude-code | codex | gemini')
     .option('--force', 'Overwrite existing skill directories')
+    .option('--global', 'Install skills user-wide (~/.claude/skills, etc.); do not touch rule files')
     .action(async (opts) => { process.exitCode = await runInit(opts); });
 
   program
     .command('uninstall')
     .description('Remove gscli rule section + skills from the current project')
     .option('--agent <id>', 'Force a specific agent')
+    .option('--global', 'Remove user-wide skills installed with `init --global`')
     .action(async (opts) => { process.exitCode = await runUninstall(opts); });
 
   program

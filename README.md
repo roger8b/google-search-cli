@@ -58,24 +58,36 @@ Exit codes: `0` ok · `1` error · `2` blocked (CAPTCHA) · `3` inconclusive (ze
 
 ## Wire into an LLM agent (Claude Code / Codex / Gemini CLI)
 
-`gscli init` detects a project's agent rule file and installs gscli-* skills:
+### Project install (default)
 
 ```bash
 cd ~/my-project
-gscli init                # auto-detects CLAUDE.md / AGENTS.md / GEMINI.md
-gscli init --agent codex  # force a specific agent
-gscli uninstall           # reverse it
+gscli init                  # creates / appends CLAUDE.md + AGENTS.md, installs skills
+gscli init --agent gemini   # add Gemini (GEMINI.md + .gemini/skills/) too
+gscli uninstall             # reverse it
 ```
 
-Effect per agent:
+By default `gscli init` targets **claude-code + codex**. For each:
 
-| Agent | Rule file | Skills dir |
-|-------|-----------|------------|
-| `claude-code` | `CLAUDE.md` | `.claude/skills/gscli-*` |
-| `codex` | `AGENTS.md` | `.agents/skills/gscli-*` |
-| `gemini` | `GEMINI.md` | `.gemini/skills/gscli-*` |
+- Creates the rule file if it doesn't exist; otherwise **appends** a marker-delimited section.
+- Copies `gscli-*` skills into the per-agent project skills dir.
+- Re-running is idempotent (the section is replaced in place).
 
-A marker-delimited section (`<!-- gscli-start --> … <!-- gscli-end -->`) is injected so re-running `gscli init` is idempotent.
+| Agent | Rule file | Project skills | User-level skills |
+|-------|-----------|---------------|-------------------|
+| `claude-code` | `CLAUDE.md` | `.claude/skills/gscli-*` | `~/.claude/skills/gscli-*` |
+| `codex` | `AGENTS.md` | `.agents/skills/gscli-*` | `~/.agents/skills/gscli-*` |
+| `gemini` | `GEMINI.md` | `.gemini/skills/gscli-*` | `~/.gemini/skills/gscli-*` |
+
+### Global install (skills only, no rule files)
+
+```bash
+gscli init --global           # installs into ~/.claude/skills/, ~/.agents/skills/, ~/.gemini/skills/
+gscli init --global --agent claude-code
+gscli uninstall --global
+```
+
+`--global` never creates or modifies project rule files — it only places `gscli-*` skills user-wide so they are available across every project.
 
 ## Output
 
