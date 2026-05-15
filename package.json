@@ -1,0 +1,19 @@
+{
+  "name": "google-search-script",
+  "version": "1.0.0",
+  "description": "Google Search Script - Extract links from Google search results via agent-browser",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "help": "tsx src/index.ts --help"
+  },
+  "dependencies": {
+    "tsx": "^4.21.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}
