@@ -39,7 +39,7 @@ export function parseCli(argv: string[]): Config {
       process.exit(0);
     }
     if (arg === '--version' || arg === '-v') {
-      process.stdout.write('google-search-script 1.0.0\n');
+      process.stdout.write('gscli 0.1.0\n');
       process.exit(0);
     }
     if (arg === '--query' || arg === '-q') {
@@ -170,11 +170,11 @@ export function parseCli(argv: string[]): Config {
 
 export function printHelp(): void {
   process.stdout.write(`
-google-search-script
+gscli
 
 Usage:
-  google-search-script search [query] [options]
-  google-search-script [query] [options]
+  gscli search [query] [options]
+  gscli [query] [options]
 
 Options:
   -q, --query <text>          Query to search
@@ -205,8 +205,8 @@ Options:
   -v, --version              Show version
 
 Examples:
-  google-search-script "agent-browser cdp mode"
-  google-search-script search --query "agent-browser cdp mode" --max-links 5
-  google-search-script search "agent-browser cdp mode" --format ndjson
+  gscli "agent-browser cdp mode"
+  gscli search --query "agent-browser cdp mode" --max-links 5
+  gscli search "agent-browser cdp mode" --format ndjson
 `);
 }

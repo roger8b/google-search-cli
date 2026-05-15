@@ -1,8 +1,9 @@
 // src/config/index.ts
 // Main configuration for Google Search Script.
 
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 
 export interface Config {
   port: number;
@@ -39,7 +40,7 @@ const SCRIPT_ROOT = resolve(__dirname, '..', '..');
 const PORT = Number(process.env.CDP_PORT || 9222);
 const GOOGLE_URL = process.env.GOOGLE_URL || 'https://www.google.com/?hl=pt-BR';
 const SEARCH_QUERY = process.env.SEARCH_QUERY || 'agent-browser cdp mode';
-const PROFILE_DIR = process.env.CHROME_DEBUG_DIR || `${process.env.HOME || ''}/.hermes/chrome-debug-google-search`;
+const PROFILE_DIR = process.env.CHROME_DEBUG_DIR || join(os.homedir(), '.gscli', 'chrome-profile');
 const CHROME_BIN = process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const AGENT_BROWSER_BIN = process.env.AGENT_BROWSER_BIN || 'agent-browser';
 const START_LOG_DIR = process.env.START_LOG_DIR || '/tmp/google-search-script';

@@ -1,19 +1,31 @@
 {
-  "name": "google-search-script",
-  "version": "1.0.0",
-  "description": "Google Search Script - Extract links from Google search results via agent-browser",
+  "name": "gscli",
+  "version": "0.1.0",
+  "description": "Google Search CLI — extract SERP links via agent-browser/CDP with human typing simulation, AI Mode, history, cache and merge.",
   "type": "module",
-  "scripts": {
-    "start": "tsx src/index.ts",
-    "help": "tsx src/index.ts --help"
+  "bin": {
+    "gscli": "./dist/index.js"
   },
-  "dependencies": {
-    "tsx": "^4.21.0"
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "prepare": "npm run build"
   },
   "engines": {
     "node": ">=18.0.0"
   },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1",
+    "tsx": "^4.21.0"
+  },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "@types/node": "^22.9.0",
+    "typescript": "^5.7.2"
   }
 }

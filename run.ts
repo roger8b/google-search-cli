@@ -1,19 +1,4 @@
 #!/usr/bin/env node
-/**
- * Google Search Script - Entry point
- * 
- * This file is kept for backwards compatibility.
- * The actual implementation is in src/index.ts
- */
-
-import { main } from './src/index.js';
-
-main()
-  .then((code) => {
-    process.exitCode = code;
-  })
-  .catch((error: unknown) => {
-    const message = error instanceof Error ? error.stack || error.message : String(error);
-    process.stderr.write(`[google-search] ERROR: ${message}\n`);
-    process.exit(1);
-  });
+// Backwards-compat shim. The real entry is src/index.ts (now a Commander
+// dispatcher). Importing it for side-effects runs the dispatcher.
+import './src/index.js';
