@@ -55,6 +55,14 @@ if [[ $NODE_MAJOR -lt 18 ]]; then
 fi
 ok "Node.js $(node --version)"
 
+# optional but strongly recommended: agent-browser
+if command -v agent-browser >/dev/null 2>&1; then
+  ok "agent-browser found at $(command -v agent-browser)"
+else
+  warn "agent-browser not on PATH — gscli search will fail until it is installed"
+  dim "install: see https://github.com/roger8b/agent-browser  (or set AGENT_BROWSER_BIN)"
+fi
+
 # install / sync
 if $USE_LOCAL; then
   if [[ -n "$LOCAL_SOURCE" ]]; then

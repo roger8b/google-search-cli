@@ -1,34 +1,44 @@
 #!/usr/bin/env node
 // src/index.ts
-// gscli entrypoint — Commander dispatches `setup` (and future `init`).
-// Anything else is forwarded to the legacy search parser (parseCli) so all
-// existing flags keep working unchanged.
+// gscli entrypoint. Commander handles `setup`, `init`, `uninstall`, `doctor`.
+// A query (or any unknown first arg) falls through to the legacy parseCli
+// so every historic search flag keeps working.
 
 import { Command } from 'commander';
 import { runSetup } from './commands/setup.js';
 import { runSearch } from './commands/search.js';
+import { runDoctor } from './commands/doctor.js';
+import { runInit } from './commands/init.js';
+import { runUninstall } from './commands/uninstall.js';
 import { printHelp as printSearchHelp } from './cli/index.js';
+import { VERSION } from './utils/version.js';
 
-const VERSION = '0.1.0';
-
-// Subcommands handled by Commander. Everything else falls through to search.
-const COMMANDER_TOKENS = new Set(['setup', 'help', '--help', '-h', '--version', '-v']);
+const COMMANDER_TOKENS = new Set([
+  'setup', 'init', 'uninstall', 'doctor',
+  'help', '--help', '-h', '--version', '-v',
+]);
 
 function printRootHelp(): void {
   process.stdout.write(`
-gscli — Google Search CLI
+gscli ${VERSION} — Google Search CLI
 
 Usage:
-  gscli setup [options]            Launch Chrome debug window + sign into Google
-  gscli [search] [query] [options] Run a search (default command)
-  gscli --version                  Show version
-  gscli --help                     Show this help
+  gscli setup [options]              Launch Chrome debug window + sign into Google
+  gscli init [options]               Wire gscli into the current project's agent rules
+  gscli uninstall [options]          Reverse of init
+  gscli doctor                       Verify Chrome, agent-browser, CDP, paths
+  gscli [search] [query] [options]   Run a search (default command)
+  gscli --version / --help
 
 Commands:
-  setup    One-time Chrome login (uses a separate profile — your personal
-           Chrome stays open and untouched)
-  search   Run a Google search. Supports regular search and Google AI Mode,
-           plus history, cache, merge-history and retry. See flags below.
+  setup       One-time Chrome login. Uses a separate profile — personal Chrome
+              stays open and untouched. Supports --force / --reuse.
+  init        Detects agent rule files (CLAUDE.md, AGENTS.md, GEMINI.md) and
+              installs gscli-* skills + injects a rules section.
+  uninstall   Removes the rules section and gscli-* skills.
+  doctor      Health check.
+  search      Run a Google search (regular or AI Mode), with history, cache,
+              merge-history and retry support.
 
 Setup options:
   --port <n>            CDP port (default: 9222)
@@ -36,6 +46,10 @@ Setup options:
   --chrome-bin <path>   Chrome binary path
   --force               Kill any Chrome on the port/profile, then relaunch
   --reuse               Reuse existing CDP if already up; skip launch
+
+Init / uninstall options:
+  --agent <id>          Force a specific agent (claude-code | codex | gemini)
+  --force               Overwrite existing skills on init
 
 Search options (use after a query, or with 'search' subcommand):
 `);
@@ -45,8 +59,6 @@ Search options (use after a query, or with 'search' subcommand):
 async function dispatch(argv: string[]): Promise<number> {
   const first = argv[2];
 
-  // Root-level help / version: intercept before parseCli, which only prints
-  // search-mode help. We want the user to see setup + AI Mode + all search flags.
   if (first === '--help' || first === '-h' || first === 'help') {
     printRootHelp();
     return 0;
@@ -64,7 +76,6 @@ async function dispatch(argv: string[]): Promise<number> {
     return runSearch(argv.slice(3));
   }
 
-  // Commander handles the rest (setup, help, version).
   const program = new Command();
   program
     .name('gscli')
@@ -79,19 +90,33 @@ async function dispatch(argv: string[]): Promise<number> {
     .option('--chrome-bin <path>', 'Chrome binary path')
     .option('--force', 'Kill any Chrome already running on the port/profile, then relaunch')
     .option('--reuse', 'If CDP already answers on the port, skip launch and go to login step')
-    .action(async (opts) => {
-      const code = await runSetup(opts);
-      process.exitCode = code;
-    });
+    .action(async (opts) => { process.exitCode = await runSetup(opts); });
 
-  // Hint that `search` exists, even though we routed it manually above.
+  program
+    .command('init')
+    .description('Wire gscli into the current project (skills + rule section)')
+    .option('--agent <id>', 'Force a specific agent: claude-code | codex | gemini')
+    .option('--force', 'Overwrite existing skill directories')
+    .action(async (opts) => { process.exitCode = await runInit(opts); });
+
+  program
+    .command('uninstall')
+    .description('Remove gscli rule section + skills from the current project')
+    .option('--agent <id>', 'Force a specific agent')
+    .action(async (opts) => { process.exitCode = await runUninstall(opts); });
+
+  program
+    .command('doctor')
+    .description('Health check: Chrome, agent-browser, CDP, paths')
+    .action(async () => { process.exitCode = await runDoctor(); });
+
   program
     .command('search [query...]')
     .description('Run a Google search (default — same as `gscli <query>`)')
     .allowUnknownOption(true)
     .helpOption(false)
     .action(() => {
-      // Unreachable: the manual route above catches `search`.
+      // Unreachable: routed manually above.
     });
 
   await program.parseAsync(argv);
@@ -99,9 +124,7 @@ async function dispatch(argv: string[]): Promise<number> {
 }
 
 dispatch(process.argv)
-  .then((code) => {
-    process.exitCode = code;
-  })
+  .then((code) => { process.exitCode = code; })
   .catch((error: unknown) => {
     const message = error instanceof Error ? error.stack || error.message : String(error);
     process.stderr.write(`[gscli] ERROR: ${message}\n`);

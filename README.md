@@ -1,153 +1,135 @@
-# google-search-script
+# gscli — Google Search CLI
 
-CLI TypeScript que extrai links da SERP do Google via `agent-browser` (CDP) com simulação humana de teclado/mouse.
+A TypeScript CLI that drives a logged-in Chrome over CDP and extracts SERP links with human-like typing. Built for LLM agent workflows: deterministic JSON output, persistent search history, Google AI Mode, multi-turn conversations, retry/cache/merge, and a hard mutex against parallel-keystroke corruption.
 
-Memória permanente, retry, cache, AI Mode, e merge cross-search incluídos.
-
-## Comportamento padrão
-
-- Conecta ao Chrome existente em `localhost:9222` (CDP); inicia se preciso
-- Limpa o input antes de digitar (evita texto residual de buscas anteriores)
-- Re-resolve o ref do search box a cada busca (3 tentativas) — mitiga `Unknown ref: e12` em sessões longas
-- Toda busca bem-sucedida é gravada em `history/searches.jsonl`
-- Detecta CAPTCHA / tráfego incomum
-
-## Instalação
-
-```bash
-chmod +x scripts/google-search-script/run.sh
-# tsx via npm ou global; veja package.json
+```
+gscli "agent-browser cdp mode"
+gscli "what is python" --ai
+gscli --merge-history --merge-limit 5
 ```
 
-## Uso básico
+## Install
 
 ```bash
-./run.sh "agent-browser cdp mode"
-./run.sh search --query "Gemma 4 fine-tuning" --max-links 5 --format json
+git clone https://github.com/roger8b/google-search-cli ~/wiki/google-search-cli
+cd ~/wiki/google-search-cli
+./install.sh --local
 ```
 
-## Flags
+The installer:
 
-| Flag | Descrição |
-|------|-----------|
-| `-q, --query <text>` | Query (alternativa: posicional) |
-| `--port <n>` | Porta CDP (default: 9222) |
-| `--google-url <url>` | URL Google (default: `https://www.google.com/?hl=pt-BR`) |
-| `--max-links <n>` | Limite de links (default: 10) |
-| `--format json\|ndjson` | Formato saída |
-| `--type-delay-scale <n>` | Velocidade digitação (default: 0.82; menor = mais rápido) |
-| `--ai-mode, --ai` | Google AI Mode (`udm=50`) |
-| `--conversation, -c` | Multi-turno AI Mode (use com `-f`) |
-| `-f, --follow-up <text>` | Follow-up (repetível) |
+1. Verifies Node ≥18.
+2. Checks for `agent-browser` on `PATH` (required for actual searches).
+3. Syncs the repo to `~/.gscli/`, runs `npm install` + `npm run build`, then `npm link` (exposes the `gscli` bin globally).
+4. Optionally runs `gscli setup` to log you in to Google.
 
-### Resilience
+Re-run with `--no-setup` to skip the Chrome login step. Re-run any time to upgrade — it never touches `~/.gscli/chrome-profile/`, `~/.gscli/history/` or any user data.
 
-| Flag | Descrição |
-|------|-----------|
-| `--retry` | Retry em timeout/inconclusive/blocked com backoff exponencial |
-| `--max-retries <n>` | Máximo de retries (default: 2) |
-
-### History (memória permanente)
-
-| Flag | Descrição |
-|------|-----------|
-| `--history-file <path>` | JSONL append-only (default: `history/searches.jsonl`) |
-| `--no-history` | Desabilita gravação |
-
-### Cache (history-backed)
-
-| Flag | Descrição |
-|------|-----------|
-| `--use-cache` | Reutiliza última entry da mesma query dentro do TTL — sem abrir browser |
-| `--cache-ttl <seconds>` | TTL (default: 3600) |
-
-### Merge cross-search (sem browser)
-
-| Flag | Descrição |
-|------|-----------|
-| `--merge-history` | Emite união deduplicada de links das últimas N buscas |
-| `--merge-limit <n>` | Searches a mesclar (default: 10) |
-| `--merge-ttl <seconds>` | Janela (default: 86400 = 24h) |
-
-### Concorrência (lock)
-
-Cada execução adquire um lock exclusivo por porta CDP em `/tmp/google-search-script-<port>.lock`. Sem lock, múltiplas instâncias paralelas no mesmo Chrome interleavam keystrokes (vimos saídas tipo `m atGr oa4oi gnvlisn` = 3 queries embaralhadas char-a-char). Lock auto-libera no exit / SIGINT / SIGTERM. Locks órfãos (PID morto OU >10min) são removidos automaticamente.
-
-| Flag | Descrição |
-|------|-----------|
-| `--no-lock` | UNSAFE: pula o mutex (use só se garantir serialização externa) |
-| `--lock-wait <seconds>` | Max espera pelo lock (default: 120) |
-
-Cada link mesclado inclui `sources: [query1, query2, ...]` indicando quais queries o produziram.
-
-## Exemplos
+## First-time setup
 
 ```bash
-# Busca normal com retry e history (default)
-./run.sh "Gemma 4 LoRA QLoRA" --max-links 10 --retry
-
-# Cache hit: 2ª chamada idêntica volta sem Chrome
-./run.sh "Gemma 4 LoRA QLoRA" --use-cache
-./run.sh "Gemma 4 LoRA QLoRA" --use-cache  # cache hit
-
-# AI Mode + multi-turno
-./run.sh "o que é python" --ai-mode -c \
-  -f "principais usos" -f "exemplos de código"
-
-# Mescla últimas 5 buscas em URLs únicos (com source-attribution)
-./run.sh --merge-history --merge-limit 5 --merge-ttl 7200
+gscli setup
 ```
 
-## Output JSON
+Opens a **separate Chrome debug window** using a dedicated profile at `~/.gscli/chrome-profile`. Your personal Chrome stays open and untouched. Complete the Google sign-in, come back, and press ENTER.
+
+| Flag | What |
+|------|------|
+| `--port <n>` | CDP port (default `9222`) |
+| `--profile-dir <path>` | Override the profile location |
+| `--chrome-bin <path>` | Override Chrome binary |
+| `--force` | Kill the existing Chrome on the port/profile and relaunch |
+| `--reuse` | If CDP already answers on the port, skip launch and go straight to login |
+
+## Daily use
+
+```bash
+gscli "<query>"                      # regular Google SERP
+gscli "<query>" --ai                 # Google AI Mode summary
+gscli "<query>" --ai -c -f "follow-up"
+gscli "<query>" --max-links 5 --format ndjson
+gscli "<query>" --use-cache          # skip browser if same query within TTL
+gscli --merge-history --merge-limit 5
+gscli doctor                         # health check
+gscli --help                         # full flag reference
+```
+
+Exit codes: `0` ok · `1` error · `2` blocked (CAPTCHA) · `3` inconclusive (zero links).
+
+## Wire into an LLM agent (Claude Code / Codex / Gemini CLI)
+
+`gscli init` detects a project's agent rule file and installs gscli-* skills:
+
+```bash
+cd ~/my-project
+gscli init                # auto-detects CLAUDE.md / AGENTS.md / GEMINI.md
+gscli init --agent codex  # force a specific agent
+gscli uninstall           # reverse it
+```
+
+Effect per agent:
+
+| Agent | Rule file | Skills dir |
+|-------|-----------|------------|
+| `claude-code` | `CLAUDE.md` | `.claude/skills/gscli-*` |
+| `codex` | `AGENTS.md` | `.agents/skills/gscli-*` |
+| `gemini` | `GEMINI.md` | `.gemini/skills/gscli-*` |
+
+A marker-delimited section (`<!-- gscli-start --> … <!-- gscli-end -->`) is injected so re-running `gscli init` is idempotent.
+
+## Output
 
 ```json
 {
   "status": "ok",
-  "query": "...",
-  "title": "...",
+  "query": "agent-browser cdp mode",
+  "title": "agent-browser cdp mode - Google Search",
   "links": [
-    { "position": 1, "title": "...", "url": "...", "snippet": "..." }
+    { "position": 1, "title": "…", "url": "…", "snippet": "…" }
   ],
   "cdpPort": 9222,
   "source": "google"
 }
 ```
 
-Status: `ok` | `blocked` (CAPTCHA) | `inconclusive` (zero links).
+`--merge-history` adds a `sources: [query1, query2, …]` field on each link.
 
-## Variáveis de ambiente
+## Paths
 
-| Var | Equivalente flag |
-|-----|------------------|
-| `CDP_PORT` | `--port` |
-| `GOOGLE_URL` | `--google-url` |
-| `SEARCH_QUERY` | `--query` |
-| `CHROME_BIN` | `--chrome-bin` |
-| `AGENT_BROWSER_BIN` | `--agent-browser-bin` |
-| `CHROME_DEBUG_DIR` | `--profile-dir` |
-| `TYPE_DELAY_SCALE` | `--type-delay-scale` |
-| `AI_MODE=true` | `--ai-mode` |
-| `SEARCH_RETRY=true` | `--retry` |
-| `SEARCH_HISTORY_FILE` | `--history-file` |
-| `SEARCH_USE_CACHE=true` | `--use-cache` |
-| `SEARCH_NO_LOCK=true` | `--no-lock` |
-| `SEARCH_LOCK_WAIT` | `--lock-wait` |
+| What | Where |
+|------|-------|
+| Install dir | `~/.gscli` (code only, safe to wipe) |
+| Chrome profile | `~/.gscli/chrome-profile` |
+| Search history | `~/.gscli/history/searches.jsonl` |
+| Chrome launch logs | `$TMPDIR/gscli/chrome-<port>.log` |
+| Per-port lock | `$TMPDIR/google-search-script-<port>.lock` |
 
-## Exit codes
+Override with env: `GSCLI_HOME`, `CHROME_DEBUG_DIR`, `SEARCH_HISTORY_FILE`, `START_LOG_DIR`, `CDP_PORT`, `CHROME_BIN`, `AGENT_BROWSER_BIN`.
 
-- `0` — sucesso (`status: ok`)
-- `1` — erro de execução
-- `2` — bloqueado (CAPTCHA / unusual traffic)
-- `3` — inconclusive (zero links)
+## Concurrency
 
-Com `--retry`, códigos 1/2/3 disparam nova tentativa antes de retornar.
+Every run takes an exclusive lock per CDP port. Without it, parallel runs on the same Chrome interleave keystrokes. Locks auto-release on exit / SIGINT / SIGTERM and are reaped after 10 min or when the holder PID dies.
 
-## Limitação AI Mode conversação
+`--no-lock` is **UNSAFE** unless you serialize externally.
 
-- `udm=50` (pt-BR) não renderiza input inline de follow-up
-- Cada follow-up vira nova URL `?q=...&udm=50`, sem contexto
-- Para preservar contexto, inclua manualmente no follow-up: `-f "no contexto de python, dê exemplos"`
+## AI Mode multi-turn caveat
 
-## Pipeline integrado
+Google's AI Mode (`udm=50`, pt-BR) does **not** render an inline follow-up box. Each follow-up is issued as a fresh `?q=…&udm=50` URL with no carried context. Always restate context in the follow-up:
 
-Para fluxo end-to-end (search → extract → consolidação), veja `scripts/research_pipeline.py`.
+```bash
+gscli "what is python" --ai -c \
+  -f "in the context of python, give a concrete example"
+```
+
+## Dev
+
+```bash
+npm install
+npm run dev -- "test query"   # tsx, no build
+npm run build                 # tsc → dist/
+npm test                      # vitest
+```
+
+## License
+
+MIT.
