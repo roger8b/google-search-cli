@@ -9,10 +9,12 @@ import { extractSearchLinks, detectBlocking } from '../parser/index.js';
 import { emitSearchResult, createPayload } from '../emitter/index.js';
 import { appendHistory } from '../history/index.js';
 import { getSearchBoxRef, takeSnapshot, getTitle, saveSnapshot, waitForLoad, clearSearchBox } from './snapshot.js';
-import { performAiSearch, performFollowUp, getAiResponse } from '../agent-mode/index.js';
+import { handleConsentIfPresent } from './consent.js';
+import { performAiSearch, performFollowUp, waitForAiResponseStable } from '../agent-mode/index.js';
+import { getLabels } from '../utils/i18n.js';
 
 function log(message: string): void {
-  process.stderr.write(`[google-search] ${message}\n`);
+  process.stderr.write(`[gscli] ${message}\n`);
 }
 
 export function connectAgentBrowser(config: Config): void {
@@ -26,7 +28,8 @@ export function openGoogle(config: Config): void {
 }
 
 export async function submitSearch(config: Config): Promise<void> {
-  const searchBoxRef = getSearchBoxRef(config.agentBrowserBin, config.port);
+  const labels = getLabels(config.googleUrl);
+  const searchBoxRef = getSearchBoxRef(config.agentBrowserBin, config.port, labels.searchbox);
   log(`Focusing search box ${searchBoxRef} with human-like movement`);
   await humanClick(config.agentBrowserBin, config.port, searchBoxRef);
 
@@ -38,7 +41,7 @@ export async function submitSearch(config: Config): Promise<void> {
   // Re-resolve ref pos-clear caso o DOM tenha mudado
   let typingRef = searchBoxRef;
   try {
-    typingRef = getSearchBoxRef(config.agentBrowserBin, config.port);
+    typingRef = getSearchBoxRef(config.agentBrowserBin, config.port, labels.searchbox);
   } catch {
     // mantem ref original se re-resolve falhar
   }
@@ -57,6 +60,14 @@ export async function performSearch(config: Config): Promise<number> {
 
   log('Waiting for page to settle');
   waitForLoad(config.agentBrowserBin, config.port);
+
+  // Dismiss a consent / cookie wall if Google interposed one.
+  const handledConsent = await handleConsentIfPresent(config);
+  if (handledConsent) {
+    log('Consent screen handled; re-settling page');
+    openGoogle(config);
+    waitForLoad(config.agentBrowserBin, config.port);
+  }
 
   // Use AI Mode if configured
   if (config.aiMode) {
@@ -107,19 +118,15 @@ export async function performSearch(config: Config): Promise<number> {
 async function performSearchAiMode(config: Config): Promise<number> {
   log(`Using AI Mode for search: ${config.searchQuery}`);
 
-  // Perform AI Mode search (types query and clicks AI Mode button)
   await performAiSearch(config);
 
-  // Wait for AI response to fully load
-  log('Waiting for AI response to settle');
-  waitForLoad(config.agentBrowserBin, config.port);
+  // Poll until the streamed answer stabilizes (replaces blind fixed sleep).
+  const aiContent = await waitForAiResponseStable(config, config.searchQuery);
 
   const snapshot = takeSnapshot(config.agentBrowserBin, config.port);
   const title = getTitle(config.agentBrowserBin, config.port);
-
   saveSnapshot(snapshot, config.startLogDir);
 
-  // Detect blocking
   const detection = detectBlocking(snapshot, title);
   if (detection.blocked) {
     log(`Google blocked the request (${detection.type})`);
@@ -127,8 +134,6 @@ async function performSearchAiMode(config: Config): Promise<number> {
     emitSearchResult(config, payload);
     return 2;
   }
-
-  const aiContent = getAiResponse(config.agentBrowserBin, config.port, config.searchQuery);
 
   if (!aiContent || aiContent.length < 50) {
     log('AI response was inconclusive or empty');
@@ -140,7 +145,7 @@ async function performSearchAiMode(config: Config): Promise<number> {
   log(`AI Mode response extracted (${aiContent.length} chars)`);
 
   const turns: Array<{ question: string; answer: string }> = [
-    { question: config.searchQuery, answer: aiContent }
+    { question: config.searchQuery, answer: aiContent },
   ];
 
   if (config.conversation && config.followUps.length > 0) {
@@ -155,7 +160,7 @@ async function performSearchAiMode(config: Config): Promise<number> {
         turns.push({ question: followUp, answer: `[blocked: ${followDetect.type}]` });
         continue;
       }
-      const followAnswer = getAiResponse(config.agentBrowserBin, config.port, followUp);
+      const followAnswer = await waitForAiResponseStable(config, followUp);
       log(`Follow-up answer extracted (${followAnswer.length} chars)`);
       turns.push({ question: followUp, answer: followAnswer });
     }

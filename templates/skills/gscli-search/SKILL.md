@@ -34,11 +34,29 @@ Exit codes: `0` ok · `1` error · `2` blocked (CAPTCHA) · `3` inconclusive (ze
 | Flag | When |
 |------|------|
 | `--ai-mode`, `--ai` | Google AI Mode summary instead of regular SERP |
-| `-c -f "follow-up"` | Multi-turn AI Mode (repeat `-f` per turn) |
+| `-c -f "follow-up"` | Multi-turn AI Mode chat — each `-f` is a turn (repeatable) |
 | `--max-links <n>` | Cap result count |
 | `--retry` | Retry on timeout/blocked/inconclusive (exponential backoff, max 2 by default) |
 | `--use-cache` | Skip browser if same query within TTL (see `gscli-history`) |
 | `--format ndjson` | One result per line (pipe-friendly) |
+| `--google-url ...&hl=<locale>` | Force UI locale (pt-BR default; en-US, es-ES, fr-FR supported) |
+
+## AI Mode multi-turn (chat)
+
+`-c -f "..."` keeps a real conversation thread: follow-ups are typed into the
+inline AI Mode input, so prior turns stay on screen (chat-like). Output JSON
+has `mode: "ai-mode"`, `conversation: true`, and a `turns: [{question, answer}]`
+array — one entry per turn.
+
+- Context is carried by the live AI Mode thread. Still **restate key context**
+  in a follow-up when it depends on an earlier answer — Google's thread memory
+  is not guaranteed across every locale/account.
+- If the inline input can't be located for a locale/account, `gscli`
+  transparently falls back to per-query URL navigation (the visible thread
+  resets but each answer is still returned in `turns`). This is logged to
+  stderr as `falling back to URL navigation`.
+- Repeated AI Mode calls in the same session take a warm path (reuses the open
+  AI Mode page) — faster, no re-navigation.
 
 ## Hard rules
 
@@ -55,8 +73,13 @@ gscli "agent-browser cdp mode" --max-links 5
 # AI Mode
 gscli "what is Gemma 4" --ai
 
-# AI Mode multi-turn — udm=50 has no inline input, so restate context per turn
-gscli "what is python" --ai -c -f "in the context of python, give code examples"
+# AI Mode multi-turn (chat thread stays on screen)
+gscli "what is python" --ai -c \
+  -f "give code examples" \
+  -f "now show an async example"
+
+# Force English UI (affects which AI Mode / search labels gscli looks for)
+gscli "what is rust" --ai --google-url "https://www.google.com/?hl=en-US"
 
 # Cache hit (skips browser entirely)
 gscli "Gemma 4 LoRA" --use-cache

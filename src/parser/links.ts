@@ -23,7 +23,21 @@ function parseEvalJson(output: string): unknown {
 
 // Eval JS extrai title + snippet do container ancestor de cada result (h3 + descricao).
 // Sobe ate 5 niveis procurando container com texto util alem do titulo.
-const EXTRACT_JS = `JSON.stringify(Array.from(document.querySelectorAll("a[href]")).filter(a => a.querySelector("h3")).map(a => {
+// Filtra anuncios: ancestor com data-text-ad ou aria-label de anuncio em
+// EN/PT/ES/FR (Sponsored, Ad, Anúncio/Anuncio, Publicidade, Patrocinado,
+// Annonce, Sponsorisé, Publicité).
+const EXTRACT_JS = `JSON.stringify(Array.from(document.querySelectorAll("a[href]")).filter(a => a.querySelector("h3")).filter(a => {
+  let n = a;
+  for (let i = 0; i < 6 && n; i++) {
+    if (n.hasAttribute) {
+      if (n.hasAttribute("data-text-ad")) return false;
+      const al = n.getAttribute("aria-label") || "";
+      if (/^(sponsored|sponsoris[ée]+|ad|an[uú]ncio|annonce|patrocinad[oa]|publicidad[e]?|publicit[ée])$/i.test(al.trim())) return false;
+    }
+    n = n.parentElement;
+  }
+  return true;
+}).map(a => {
   const h3 = a.querySelector("h3");
   const title = ((h3 && h3.innerText) || "").trim();
   let container = a.parentElement;
