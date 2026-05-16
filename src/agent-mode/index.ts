@@ -1,89 +1,120 @@
 // src/agent-mode/index.ts
-// AI Mode search - Uses Google AI Mode instead of regular search.
+// AI Mode search — Google AI Mode (udm=50) instead of the regular SERP.
 
 import { Config } from '../config/index.js';
-import { runAgentBrowser } from '../browser/agent.js';
+import { runAgentBrowser, runMaybe } from '../browser/agent.js';
 import { humanType } from '../human/index.js';
-import { waitForLoad } from '../search/snapshot.js';
+import { sleep } from '../human/utils.js';
+import { waitForLoad, findSearchBoxInSnapshot } from '../search/snapshot.js';
+import { getCurrentUrl } from '../search/consent.js';
+import { getLabels } from '../utils/i18n.js';
 
 function log(message: string): void {
-  process.stderr.write(`[google-search:ai-mode] ${message}\n`);
+  process.stderr.write(`[gscli:ai-mode] ${message}\n`);
 }
 
-const AI_MODE_BUTTON_TEXT = 'Modo IA';
-
-export async function activateAiMode(
-  agentBrowserBin: string,
-  port: number
-): Promise<void> {
-  log(`Activating AI Mode by finding "${AI_MODE_BUTTON_TEXT}"`);
-  const result = runAgentBrowser(agentBrowserBin, [
-    '--cdp', String(port),
-    'find', 'text', AI_MODE_BUTTON_TEXT, 'click'
-  ], port);
-  log(`AI Mode button click result: ${result || 'success'}`);
-  sleep(5);
+function isOnAiMode(bin: string, port: number): boolean {
+  try {
+    return /[?&]udm=50\b/.test(getCurrentUrl(bin, port));
+  } catch {
+    return false;
+  }
 }
 
-export async function performAiSearch(config: Config): Promise<void> {
-  log(`Performing AI Mode search for: ${config.searchQuery}`);
-
-  const snapshot = runAgentBrowser(config.agentBrowserBin, [
-    '--cdp', String(config.port),
-    'snapshot'
-  ], config.port);
-
-  const searchBoxMatch = snapshot.match(/combobox "Pesquisar" \[ref=([a-z0-9]+)\]/i);
-  const searchBoxRef = searchBoxMatch ? searchBoxMatch[1] : 'e12';
-  log(`Found search box ref: ${searchBoxRef}`);
-
-  log(`Typing query: ${config.searchQuery}`);
-  await humanType(
+export async function activateAiMode(config: Config): Promise<void> {
+  const labels = getLabels(config.googleUrl);
+  log(`activating AI Mode via button "${labels.aiModeButton}"`);
+  const result = runAgentBrowser(
     config.agentBrowserBin,
+    ['--cdp', String(config.port), 'find', 'text', labels.aiModeButton, 'click'],
     config.port,
-    config.searchQuery,
-    searchBoxRef,
-    config
+    { allowFailure: true },
   );
-
-  sleep(1);
-  await activateAiMode(config.agentBrowserBin, config.port);
-
-  log('Submitting AI Mode query with Enter');
-  runAgentBrowser(config.agentBrowserBin, [
-    '--cdp', String(config.port),
-    'press', 'Enter'
-  ], config.port);
-
-  log('Waiting for AI response...');
-  waitForLoad(config.agentBrowserBin, config.port);
-  sleep(8);
+  log(`AI Mode button click: ${result || 'ok'}`);
+  await sleep(5000);
 }
 
 /**
- * Submits a follow-up question by navigating to a new AI Mode URL.
- *
- * Reason: AI Mode SERP variant (udm=50) in pt-BR for this account does not
- * render an inline follow-up textbox. The placeholder div
- * `#aim-server-input-plate-placeholder` exists but its bootstrap script
- * never inflates the textarea. Verified via DOM inspection — only textarea
- * present is feedback "Dê alguns detalhes…", not visible.
- *
- * Workaround: each follow-up navigates to a fresh `?q=<text>&udm=50` URL.
- * Google session cookie carries history (visible in "Histórico do Modo IA"),
- * so context may persist server-side, but this is independent-query semantics.
+ * Tries the warm path: if we are already on an AI Mode page, click the
+ * "new conversation" affordance instead of re-navigating from google.com.
+ * Returns true if the warm path was taken.
+ */
+async function tryNewThread(config: Config): Promise<boolean> {
+  if (!isOnAiMode(config.agentBrowserBin, config.port)) return false;
+  const labels = getLabels(config.googleUrl);
+  log('already on AI Mode — attempting warm-path "new conversation"');
+  for (const btn of labels.newThreadButton) {
+    runAgentBrowser(
+      config.agentBrowserBin,
+      ['--cdp', String(config.port), 'find', 'text', btn, 'click'],
+      config.port,
+      { allowFailure: true },
+    );
+  }
+  await sleep(1500);
+  return true;
+}
+
+export async function performAiSearch(config: Config): Promise<void> {
+  log(`performing AI Mode search for: ${config.searchQuery}`);
+
+  // Warm path: skip the google.com → type → click-AI-button dance entirely
+  // when an AI Mode page is already open in this session.
+  const warm = await tryNewThread(config);
+
+  const snapshot = runMaybe(
+    config.agentBrowserBin,
+    ['--cdp', String(config.port), 'snapshot', '-i'],
+    config.port,
+  );
+  const labels = getLabels(config.googleUrl);
+  const searchBoxRef = findSearchBoxInSnapshot(snapshot, labels.searchbox);
+  if (!searchBoxRef) {
+    throw new Error(
+      `Could not detect AI Mode search box (locale labels: ${labels.searchbox.join(', ')}). ` +
+        `The page may be on a consent screen or a different language than the configured googleUrl.`,
+    );
+  }
+  log(`search box ref: ${searchBoxRef}`);
+
+  log(`typing query: ${config.searchQuery}`);
+  await humanType(config.agentBrowserBin, config.port, config.searchQuery, searchBoxRef, config);
+
+  await sleep(1000);
+  if (!warm) {
+    await activateAiMode(config);
+  }
+
+  log('submitting AI Mode query with Enter');
+  runAgentBrowser(config.agentBrowserBin, ['--cdp', String(config.port), 'press', 'Enter'], config.port);
+
+  log('waiting for AI response…');
+  waitForLoad(config.agentBrowserBin, config.port);
+}
+
+/**
+ * Follow-up question. AI Mode (udm=50) does not reliably render an inline
+ * follow-up textbox for every locale/account, so we navigate to a fresh
+ * `?q=…&udm=50` URL. The Google session cookie carries history server-side.
  */
 export async function performFollowUp(config: Config, query: string): Promise<void> {
-  log(`Follow-up via URL navigation: ${query}`);
-  const url = `${stripQuery(config.googleUrl)}/search?q=${encodeURIComponent(query)}&hl=pt-BR&udm=50`;
-  runAgentBrowser(config.agentBrowserBin, [
-    '--cdp', String(config.port),
-    'open', url
-  ], config.port, { allowFailure: true });
-
-  log('Waiting for follow-up response...');
+  log(`follow-up via URL navigation: ${query}`);
+  const locale = localeParam(config.googleUrl);
+  const url = `${stripQuery(config.googleUrl)}/search?q=${encodeURIComponent(query)}${locale}&udm=50`;
+  runAgentBrowser(config.agentBrowserBin, ['--cdp', String(config.port), 'open', url], config.port, {
+    allowFailure: true,
+  });
+  log('waiting for follow-up response…');
   waitForLoad(config.agentBrowserBin, config.port);
-  sleep(8);
+}
+
+function localeParam(googleUrl: string): string {
+  try {
+    const hl = new URL(googleUrl).searchParams.get('hl');
+    return hl ? `&hl=${encodeURIComponent(hl)}` : '';
+  } catch {
+    return '';
+  }
 }
 
 function stripQuery(googleUrl: string): string {
@@ -96,20 +127,56 @@ function stripQuery(googleUrl: string): string {
 }
 
 /**
- * Extracts AI Mode response text.
- *
- * Strategy: locate the answer container that holds the heading matching the
- * user query, then return its full innerText. Fallbacks: known AI Mode
- * container classes, then `[role=main]`, then trimmed body text.
+ * Polls the AI response until its length stabilizes (streaming finished) or a
+ * timeout elapses. Replaces the previous blind fixed sleep.
+ */
+export async function waitForAiResponseStable(
+  config: Config,
+  query: string,
+  opts: { maxMs?: number; gapMs?: number; stableNeeded?: number } = {},
+): Promise<string> {
+  const maxMs = opts.maxMs ?? 20000;
+  const gapMs = opts.gapMs ?? 600;
+  const stableNeeded = opts.stableNeeded ?? 4;
+
+  const start = Date.now();
+  let lastLen = -1;
+  let stable = 0;
+  let last = '';
+
+  while (Date.now() - start < maxMs) {
+    const text = getAiResponse(config.agentBrowserBin, config.port, query);
+    last = text;
+    if (text.length > 100 && text.length === lastLen) {
+      stable += 1;
+      if (stable >= stableNeeded) {
+        log(`AI response stable after ${Math.round((Date.now() - start) / 1000)}s (${text.length} chars)`);
+        return text;
+      }
+    } else {
+      stable = 0;
+      lastLen = text.length;
+    }
+    await sleep(gapMs);
+  }
+  log(`AI response poll timed out (${last.length} chars) — returning best effort`);
+  return last;
+}
+
+/**
+ * Extracts AI Mode response text. Strategy: locate the answer container whose
+ * heading matches the query, else known AI Mode containers, else [role=main],
+ * else trimmed body text.
  */
 export function getAiResponse(agentBrowserBin: string, port: number, query: string): string {
-  log('Extracting AI response content...');
-
   const escapedQuery = query.replace(/[\\'"]/g, '\\$&');
-  const content = runAgentBrowser(agentBrowserBin, [
-    '--cdp', String(port),
-    'eval',
-    `
+  const content = runAgentBrowser(
+    agentBrowserBin,
+    [
+      '--cdp',
+      String(port),
+      'eval',
+      `
     (() => {
       const QUERY = '${escapedQuery}'.toLowerCase().trim();
 
@@ -147,8 +214,10 @@ export function getAiResponse(agentBrowserBin: string, port: number, query: stri
       const body = document.body.innerText || '';
       return body.substring(0, 6000).trim();
     })()
-    `
-  ], port);
+    `,
+    ],
+    port,
+  );
 
   return stripJsonQuotes(content).trim();
 }
@@ -163,13 +232,4 @@ function stripJsonQuotes(s: string): string {
     }
   }
   return t;
-}
-
-function sleep(seconds: number): void {
-  const ms = seconds * 1000;
-  process.stdout.write(`[sleep] ${seconds}s\n`);
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    // busy wait
-  }
 }

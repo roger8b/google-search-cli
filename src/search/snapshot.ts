@@ -5,10 +5,10 @@ import { runMaybe } from '../browser/agent.js';
 import fs from 'node:fs';
 import path from 'path';
 
-function findSearchBoxInSnapshot(snapshot: string): string | null {
+export function findSearchBoxInSnapshot(snapshot: string, labels: string[] = ['Pesquisar', 'Search']): string | null {
   const lines = snapshot.split(/\r?\n/);
   for (const line of lines) {
-    const isSearchBox = line.includes('combobox "Pesquisar"') || line.includes('combobox "Search"');
+    const isSearchBox = labels.some((l) => line.includes(`combobox "${l}"`));
     if (!isSearchBox) continue;
     const match = line.match(/ref=(e\d+)/);
     if (match) return match[1];
@@ -16,13 +16,13 @@ function findSearchBoxInSnapshot(snapshot: string): string | null {
   return null;
 }
 
-export function getSearchBoxRef(bin: string, port: number): string {
+export function getSearchBoxRef(bin: string, port: number, labels: string[] = ['Pesquisar', 'Search']): string {
   // 3 tentativas com fresh snapshot - mitiga ref staleness em sessoes longas
   const errors: string[] = [];
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const snapshot = runMaybe(bin, ['--cdp', String(port), 'snapshot', '-i'], port);
-      const ref = findSearchBoxInSnapshot(snapshot);
+      const ref = findSearchBoxInSnapshot(snapshot, labels);
       if (ref) return ref;
       errors.push(`attempt ${attempt}: combobox not found in snapshot`);
     } catch (e) {
