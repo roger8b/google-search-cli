@@ -45,8 +45,17 @@ export async function handleConsentIfPresent(config: Config): Promise<boolean> {
       allowFailure: true,
     });
     await sleep(1500);
-    const after = getCurrentUrl(bin, port);
-    if (!/consent\.google/i.test(after)) {
+
+    // Verify clearance for BOTH cases:
+    //  - consent.google redirect → URL must leave consent.google
+    //  - in-page banner → URL often stays on google.com, so re-check the
+    //    snapshot for the banner text instead of trusting the URL.
+    const afterUrl = getCurrentUrl(bin, port);
+    const afterSnap = runMaybe(bin, ['--cdp', String(port), 'snapshot', '-i'], port);
+    const stillOnConsentUrl = /consent\.google/i.test(afterUrl);
+    const bannerStillVisible = CONSENT_PATTERNS.test(afterSnap);
+
+    if (!stillOnConsentUrl && !bannerStillVisible) {
       log('consent cleared');
       return true;
     }

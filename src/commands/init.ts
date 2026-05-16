@@ -29,6 +29,14 @@ type Scope = 'local' | 'global' | 'both';
 type Method = 'symlink' | 'copy';
 type ExistingAction = 'keep' | 'update' | 'remove' | 'ask-each';
 
+function isScope(v: unknown): v is Scope {
+  return v === 'local' || v === 'global' || v === 'both';
+}
+
+function isMethod(v: unknown): v is Method {
+  return v === 'symlink' || v === 'copy';
+}
+
 const GSCLI_START = '<!-- gscli-start -->';
 const GSCLI_END = '<!-- gscli-end -->';
 
@@ -199,6 +207,14 @@ function resolveSkillsDestForAgent(target: string, def: AgentConfig, scope: Scop
 
 export async function runInit(opts: InitOpts = {}): Promise<number> {
   const target = path.resolve(opts.cwd ?? '.');
+  if (opts.scope !== undefined && !isScope(opts.scope)) {
+    console.error(pc.red(`invalid --scope: ${String(opts.scope)} (expected local | global | both)`));
+    return 1;
+  }
+  if (opts.method !== undefined && !isMethod(opts.method)) {
+    console.error(pc.red(`invalid --method: ${String(opts.method)} (expected symlink | copy)`));
+    return 1;
+  }
   if (!fs.existsSync(target)) {
     console.error(pc.red(`target not found: ${target}`));
     return 1;
@@ -389,21 +405,21 @@ export async function runInit(opts: InitOpts = {}): Promise<number> {
   }
 
   // ── .gscli.json manifest ─────────────────────────────────────────────────
+  // Always refresh: a later init can change agents/scope/method, and the
+  // global uninstall path relies on this manifest for non-detected agents.
   const configPath = path.join(target, '.gscli.json');
-  if (!fs.existsSync(configPath) || opts.force) {
-    await fs.writeJson(
-      configPath,
-      {
-        agents: selectedAgents,
-        scope,
-        method,
-        version: 1,
-        installed_at: new Date().toISOString(),
-      },
-      { spaces: 2 },
-    );
-    console.log(pc.green(`\n✓ wrote .gscli.json`));
-  }
+  await fs.writeJson(
+    configPath,
+    {
+      agents: selectedAgents,
+      scope,
+      method,
+      version: 1,
+      installed_at: new Date().toISOString(),
+    },
+    { spaces: 2 },
+  );
+  console.log(pc.green(`\n✓ wrote .gscli.json`));
 
   console.log(pc.green(`\n✓ project wired to gscli. Run \`gscli doctor\` to verify.`));
   return 0;

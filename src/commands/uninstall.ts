@@ -18,11 +18,19 @@ export interface UninstallOpts {
 
 type Scope = 'local' | 'global' | 'both';
 
+function isScope(v: unknown): v is Scope {
+  return v === 'local' || v === 'global' || v === 'both';
+}
+
 const GSCLI_START = '<!-- gscli-start -->';
 const GSCLI_END = '<!-- gscli-end -->';
 
 export async function runUninstall(opts: UninstallOpts = {}): Promise<number> {
   const target = path.resolve(opts.cwd ?? '.');
+  if (opts.scope !== undefined && !isScope(opts.scope)) {
+    console.error(pc.red(`invalid --scope: ${String(opts.scope)} (expected local | global | both)`));
+    return 1;
+  }
   const scope: Scope = opts.scope ?? 'local';
 
   // Decide which agents to act on. If --agent given, use only that one;

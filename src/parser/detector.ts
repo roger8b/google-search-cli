@@ -18,8 +18,9 @@ export function detectBlocking(snapshot: string, title: string): DetectionResult
   }
 
   // Soft block: consent / cookie wall standing between us and results.
+  // Kept in sync with CONSENT_PATTERNS in src/search/consent.ts (EN/PT/ES/FR).
   if (
-    /consent\.google|before you continue to google|antes de (ir|continuar) para o google|antes de continuar a usar o google/i.test(
+    /consent\.google|before you continue to google|antes de (ir|continuar) para o google|antes de continuar a usar o google|continuar para o google|aceitar tudo|accept all|tout accepter|avant de continuer|aceptar todo|antes de continuar/i.test(
       combined,
     )
   ) {

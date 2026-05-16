@@ -219,7 +219,9 @@ export async function waitForAiResponseStable(
  * else trimmed body text.
  */
 export function getAiResponse(agentBrowserBin: string, port: number, query: string): string {
-  const escapedQuery = query.replace(/[\\'"]/g, '\\$&');
+  // Serialize via JSON.stringify so newlines / unicode separators / quotes in
+  // the user query cannot break or alter the evaluated script.
+  const queryLiteral = JSON.stringify(query.toLowerCase().trim());
   const content = runAgentBrowser(
     agentBrowserBin,
     [
@@ -228,7 +230,7 @@ export function getAiResponse(agentBrowserBin: string, port: number, query: stri
       'eval',
       `
     (() => {
-      const QUERY = '${escapedQuery}'.toLowerCase().trim();
+      const QUERY = ${queryLiteral};
 
       const headings = Array.from(document.querySelectorAll('h1, h2, h3, [role=heading]'));
       for (const h of headings) {

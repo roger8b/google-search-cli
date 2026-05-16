@@ -42,6 +42,7 @@ afterEach(() => {
 afterAll(() => {
   fs.rmSync(fakeHome, { recursive: true, force: true });
   if (realHome !== undefined) process.env.HOME = realHome;
+  else delete process.env.HOME;
   if (realClaudeDir !== undefined) process.env.CLAUDE_CONFIG_DIR = realClaudeDir;
   else delete process.env.CLAUDE_CONFIG_DIR;
 });
@@ -134,5 +135,27 @@ describe('runUninstall', () => {
   it('exits 0 with a warning when nothing is installed', async () => {
     const code = await runUninstall({ cwd: project });
     expect(code).toBe(0);
+  });
+
+  it('rejects an invalid --scope instead of silent no-op', async () => {
+    // @ts-expect-error — exercising the runtime guard with a bad value
+    const code = await runUninstall({ cwd: project, scope: 'everywhere' });
+    expect(code).toBe(1);
+  });
+});
+
+describe('runInit input validation', () => {
+  it('rejects an invalid --scope', async () => {
+    // @ts-expect-error — runtime guard
+    const code = await runInit({ cwd: project, yes: true, scope: 'nope' });
+    expect(code).toBe(1);
+    expect(fs.existsSync(path.join(project, '.gscli.json'))).toBe(false);
+  });
+
+  it('rejects an invalid --method', async () => {
+    // @ts-expect-error — runtime guard
+    const code = await runInit({ cwd: project, yes: true, method: 'hardlink' });
+    expect(code).toBe(1);
+    expect(fs.existsSync(path.join(project, 'CLAUDE.md'))).toBe(false);
   });
 });

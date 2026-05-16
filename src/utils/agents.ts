@@ -7,10 +7,12 @@ import fs from "fs-extra";
 // the gscli CLI to wire AGENTS.md / CLAUDE.md / GEMINI.md / etc.
 
 const home = os.homedir();
-const configHome = process.env.XDG_CONFIG_HOME ?? path.join(home, ".config");
-const codexHome = process.env.CODEX_HOME ?? path.join(home, ".codex");
-const claudeHome = process.env.CLAUDE_CONFIG_DIR ?? path.join(home, ".claude");
-const vibeHome = process.env.VIBE_HOME ?? path.join(home, ".vibe");
+// `||` (not `??`): an empty-string env var should fall back to the default,
+// not be treated as a configured path.
+const configHome = process.env.XDG_CONFIG_HOME || path.join(home, ".config");
+const codexHome = process.env.CODEX_HOME || path.join(home, ".codex");
+const claudeHome = process.env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
+const vibeHome = process.env.VIBE_HOME || path.join(home, ".vibe");
 
 export type AgentId = string;
 
