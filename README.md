@@ -4,47 +4,39 @@
 [![Node.js ≥18](https://img.shields.io/badge/node-%E2%89%A518-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A TypeScript CLI that drives a logged-in Chrome over CDP and extracts Google SERP links with human-like typing. Built for LLM agent workflows: deterministic JSON output, persistent search history, Google AI Mode, multi-turn conversations, retry/cache/merge, and a hard mutex against parallel-keystroke corruption.
+A TypeScript CLI that drives a **logged-in Chrome over CDP** and extracts Google results with human-like typing. Built for LLM agent workflows: deterministic JSON output, persistent search history, Google AI Mode (chat-like multi-turn), retry/cache/merge, locale awareness, consent-wall handling, and a hard mutex against parallel-keystroke corruption.
 
 ## The Core Idea
 
-`WebFetch` and most "search" tools hit Google anonymously through scrapers or proxies. The results are either generic, geo-skewed, blocked by anti-bot, or missing the personalization (history, language, account context) that makes search useful for real work.
+`WebFetch` and most "search" tools hit Google anonymously through scrapers or proxies. The results are generic, geo-skewed, blocked by anti-bot, or missing the personalization (history, language, account context) that makes search useful for real work.
 
-`gscli` works differently: it drives your **own logged-in Chrome** through the Chrome DevTools Protocol. The browser is the one you already trust — same cookies, same account, same locale. The CLI types into the search box at a human cadence, scrapes the SERP, and returns structured JSON. AI Mode (`udm=50`) works the same way. Every successful search is appended to a JSONL history, so cache hits and cross-search merges happen without re-opening the browser.
+`gscli` drives your **own logged-in Chrome** through the Chrome DevTools Protocol — same cookies, same account, same locale. It types into the search box at a human cadence, scrapes the result, and emits structured JSON. Google AI Mode (`udm=50`) works the same way, including a real on-screen conversation thread for follow-ups. Every successful search is appended to a JSONL history, so cache hits and cross-search merges happen without re-opening the browser.
 
-You never click anything yourself; you never copy URLs out of a SERP again. The agent runs `gscli "<query>"`, gets a JSON list of links, and feeds them into whatever pipeline you have.
+The agent runs `gscli "<query>"`, gets JSON, and feeds it into whatever pipeline you have. No clicking, no copy-pasting URLs out of a SERP.
 
-> The browser-as-API pattern is inspired by [agent-browser](https://agent-browser.dev/), which `gscli` builds on for CDP automation.
+> The browser-as-API pattern builds on [agent-browser](https://agent-browser.dev/) for CDP automation.
 
 ---
 
 ## Architecture
 
 ```
-~/.gscli/                  User data root — never wiped by the installer
-├── chrome-profile/        Persistent Chrome profile (your Google login)
-├── history/searches.jsonl Append-only search history (JSONL)
-└── (installed CLI source via `install.sh --local`)
+~/.gscli/                     User data root — never wiped by the installer
+├── chrome-profile/           Persistent Chrome profile (your Google login)
+└── history/searches.jsonl    Append-only search history (JSONL)
 
-$TMPDIR/gscli/             Chrome launch logs
+~/.gscli/  (or a clone dir)   Installed CLI source (npm link → `gscli` bin)
+$TMPDIR/gscli/                Chrome launch logs
 $TMPDIR/google-search-script-<port>.lock   Per-port mutex
 ```
 
 **Three layers:**
 
-1. **Chrome (CDP)** — a real, logged-in browser instance that `gscli setup` starts in a separate window using a dedicated profile. Your personal Chrome stays untouched.
+1. **Chrome (CDP)** — a real, logged-in browser `gscli setup` starts in a separate window using a dedicated profile. Your personal Chrome is untouched.
+2. **agent-browser** — external CDP client that types, moves the mouse on Bézier curves, scrolls, and reads the DOM at human cadence so anti-bot heuristics treat the session as a person.
+3. **gscli** — orchestration (Commander, i18n, consent handling, history, cache, merge, lock, retry, AI Mode warm-path) that emits structured output to stdout.
 
-2. **agent-browser** — the external CDP client (`agent-browser` binary) that types into the page, scrolls, and reads the DOM at human cadence so Google's anti-bot heuristics treat the session as a person.
-
-3. **gscli** — the orchestration layer (Commander, history, cache, merge, lock, retry) that decides what to do with the browser and emits structured output to stdout.
-
-Skills and rule files installed by `gscli init` live in the **project** (or `$HOME` with `--global`), never inside `~/.gscli/`. Updating the CLI updates the skill templates automatically.
-
----
-
-## Why This Works
-
-The painful parts of search-as-an-LLM-tool are session state, rate limiting, and result quality. A logged-in Chrome solves all three: cookies and history give you personalized results, the cadence of human typing keeps you under anti-bot thresholds, and a persistent profile means the second search of the day costs nothing. The per-port mutex prevents the foot-gun where two parallel runs share one Chrome and interleave keystrokes character-by-character (yes, this happens — we have the scrambled logs to prove it).
+Skills and rule files installed by `gscli init` live in the **project** (or `$HOME` for global scope), never inside `~/.gscli/`. Updating the CLI updates the skill templates automatically (symlink install).
 
 ---
 
@@ -56,22 +48,18 @@ cd ~/wiki/google-search-cli
 ./install.sh --local
 ```
 
-The script installs `gscli` globally and runs `gscli setup` so you can sign into Google in one step.
+The script verifies Node ≥18, checks `agent-browser` is on `PATH`, syncs into `~/.gscli/`, builds, `npm link`s the `gscli` bin, and runs `gscli setup` so you sign into Google in one step.
 
-**Options:**
+**`install.sh` options:**
 
-```bash
-# install only — skip the Chrome login at the end
-./install.sh --local --no-setup
+| Invocation | Effect |
+|------------|--------|
+| `./install.sh` | Clone fresh from the remote, build, link, setup |
+| `./install.sh --local` | Use the current checkout (`$PWD`), build, link, setup |
+| `./install.sh --local /path/to/src` | Sync that path into `~/.gscli/` first |
+| `./install.sh --local --no-setup` | Install only, skip the Chrome login step |
 
-# clone fresh from a remote and install
-./install.sh
-
-# sync a local checkout into ~/.gscli/ (development iteration)
-./install.sh --local /path/to/google-search-cli
-```
-
-**Manual install (from source):**
+**Manual install:**
 
 ```bash
 git clone <repo> ~/.gscli && cd ~/.gscli
@@ -79,107 +67,157 @@ npm install && npm run build && npm link
 gscli setup
 ```
 
-**Prerequisites:** Node ≥18 and the [`agent-browser`](https://agent-browser.dev/) binary on `PATH`. The installer warns when it's missing.
+**Prerequisites:** Node ≥18 and the [`agent-browser`](https://agent-browser.dev/) binary on `PATH` (the installer warns if missing).
 
 ---
 
-## First-Time Setup
+## Quick Start
 
 ```bash
-# 1. Install (Chrome login prompted automatically)
+# 1. Install + sign in to Google (one time per machine)
 ./install.sh --local
 
-# 2. Wire any project — run inside a repo
-cd ~/code/my-project
-gscli init
-#    → creates / appends to CLAUDE.md + AGENTS.md
-#    → installs gscli-search and gscli-history skills
-#    → idempotent: re-running replaces the section in place
+# 2. Wire a project so agents know about gscli (one time per project)
+cd ~/code/my-project && gscli init
 
-# 3. From anywhere — search
+# 3. Search from anywhere
 gscli "agent-browser cdp mode"
 gscli "what is python" --ai
+gscli "what is python" --ai -c -f "give code examples" -f "now an async one"
 gscli --merge-history --merge-limit 5
+
+# 4. Verify the environment whenever something feels off
+gscli doctor
 ```
 
 ---
 
 ## Commands
 
-### Project Setup
+`gscli` has five commands. `search` is the default — `gscli "<query>"` ≡ `gscli search "<query>"`.
 
-```bash
-gscli init [options]
-#   --agent <id>     Force a specific agent (claude-code | codex | gemini)
-#   --global         User-wide skills only (~/.claude/skills, ~/.agents/skills,
-#                    ~/.gemini/skills); does not create or modify rule files
-#   --force          Overwrite existing skill directories
+### `gscli setup` — one-time Chrome login
 
-gscli uninstall [options]
-#   --agent <id>     Same selectors as init
-#   --global         Remove user-wide skills installed with `init --global`
-```
+Opens a **separate Chrome debug window** with a dedicated profile. Your personal Chrome stays open and untouched. Sign in to Google once; the profile is reused on every future search.
 
-**Supported agents:**
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--port <n>` | `9222` | CDP port |
+| `--profile-dir <path>` | `~/.gscli/chrome-profile` | Profile location |
+| `--chrome-bin <path>` | macOS Chrome path | Chrome binary |
+| `--force` | – | Kill any Chrome on that port/profile, then relaunch |
+| `--reuse` | – | If CDP already answers, skip launch and go to login |
 
-| Agent | Rule file | Project skills | User-level skills |
-|-------|-----------|----------------|-------------------|
-| `claude-code` | `CLAUDE.md` | `.claude/skills/gscli-*` | `~/.claude/skills/gscli-*` |
-| `codex` | `AGENTS.md` | `.agents/skills/gscli-*` | `~/.agents/skills/gscli-*` |
-| `gemini` | `GEMINI.md` | `.gemini/skills/gscli-*` | `~/.gemini/skills/gscli-*` |
-
-Default project install targets **claude-code + codex** (the two universal ones). Add `--agent gemini` to wire Gemini CLI too. Use `--global` for a user-wide install with no project files touched.
-
-### Chrome Setup
-
-```bash
-gscli setup [options]
-#   --port <n>            CDP port (default: 9222)
-#   --profile-dir <path>  Chrome profile dir (default: ~/.gscli/chrome-profile)
-#   --chrome-bin <path>   Chrome binary path
-#   --force               Kill any Chrome on the port/profile, then relaunch
-#   --reuse               Reuse existing CDP if already up; skip launch
-```
-
-Opens a **separate Chrome debug window** with a dedicated profile. Your personal Chrome stays open and untouched. Complete the Google sign-in once and the profile is reused on every future search.
-
-### Search (default command)
+### `gscli search` — run a search (default command)
 
 ```bash
 gscli "<query>" [options]
-gscli search "<query>" [options]   # explicit form
-
-# Regular SERP
-gscli "<query>"
-gscli "<query>" --max-links 5 --format ndjson
-
-# Google AI Mode (udm=50)
-gscli "<query>" --ai
-gscli "<query>" --ai -c -f "follow-up A" -f "follow-up B"
-
-# History-backed cache (no browser)
-gscli "<query>" --use-cache --cache-ttl 3600
-
-# Cross-search merge (no browser)
-gscli --merge-history --merge-limit 5 --merge-ttl 7200
-
-# Retry on transient failures
-gscli "<query>" --retry --max-retries 3
+gscli search "<query>" [options]     # explicit
+gscli -q "<query>" [options]         # flag form
 ```
 
-Run `gscli --help` for the full flag reference.
+**Browser / target**
 
-### Health & Introspection
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `-q, --query <text>` | – | Query (alternative to the positional arg) |
+| `--port <n>` | `9222` | CDP port |
+| `--google-url <url>` | `https://www.google.com/?hl=pt-BR` | Start URL — the `?hl=` locale drives all UI labels (see [Locales](#locale-support)) |
+| `--chrome-bin <path>` | macOS Chrome | Chrome binary |
+| `--agent-browser-bin <path>` | `agent-browser` | agent-browser binary |
+| `--profile-dir <path>` | `~/.gscli/chrome-profile` | Chrome profile |
+| `--start-log-dir <path>` | `$TMPDIR/gscli` | Launch-log directory |
+
+**Output / volume**
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--max-links <n>` | `10` | Cap extracted links |
+| `--format <json\|ndjson>` | `json` | Output shape (ndjson = one record per line) |
+| `--type-delay-scale <n>` | `0.82` | Typing speed multiplier (lower = faster) |
+
+**AI Mode**
+
+| Flag | Purpose |
+|------|---------|
+| `--ai-mode`, `--ai` | Use Google AI Mode (`udm=50`) instead of the SERP |
+| `-c, --conversation` | Enable multi-turn chat (use with `-f`) |
+| `-f, --follow-up <text>` | A follow-up turn — repeatable |
+
+**Resilience**
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--retry` | – | Retry on `error`/`blocked`/`inconclusive` with exponential backoff |
+| `--max-retries <n>` | `2` | Retry cap when `--retry` |
+
+**History / cache / merge** (see also the `gscli-history` skill)
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--history-file <path>` | `~/.gscli/history/searches.jsonl` | History JSONL location |
+| `--no-history` | – | Do not append this search to history |
+| `--use-cache` | – | Return a prior identical query within TTL — **no browser** |
+| `--cache-ttl <seconds>` | `3600` | Cache window for `--use-cache` |
+| `--merge-history` | – | Emit a deduped union of links from recent searches — **no browser** |
+| `--merge-limit <n>` | `10` | How many recent searches to merge |
+| `--merge-ttl <seconds>` | `86400` | Time window for `--merge-history` |
+
+**Concurrency (lock)**
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--no-lock` | – | **UNSAFE** — skip the per-port mutex (parallel runs interleave keystrokes) |
+| `--lock-wait <seconds>` | `120` | Max wait to acquire the lock |
+
+### `gscli init` — wire a project for agents
+
+Interactive by default. Detects every supported agent installed on the machine (55-agent registry), lets you pick which to wire, installs the `gscli-*` skills, and injects a marker-delimited rules section into each agent's rule file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.clinerules`, `.cursor/rules/gscli.mdc`, …). Writes a `.gscli.json` manifest.
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--scope <local\|global\|both>` | ask | `local` = project dirs; `global` = each agent's home dir; `both` |
+| `--method <symlink\|copy>` | ask (symlink) | `symlink` auto-updates skills when the CLI updates; `copy` is a static snapshot |
+| `--update` | – | Re-sync existing skills without prompting |
+| `--show-all` | – | List every supported agent, not just detected ones |
+| `--force` | – | Overwrite even if a gscli section already exists |
+| `-y, --yes` | – | Non-interactive: detected agents, `local`, `symlink` |
 
 ```bash
-gscli doctor          # validates Chrome, agent-browser, CDP, profile, history, logs
+gscli init                              # interactive
+gscli init -y                           # non-interactive, sane defaults
+gscli init --scope both --method copy   # explicit, still picks agents interactively
+gscli init -y --scope global            # user-wide skills for detected agents
+```
+
+Re-running is idempotent: the rules section is replaced in place, the manifest is always refreshed (so a later `init` with different agents/scope/method does not leave stale metadata).
+
+### `gscli uninstall` — reverse `init`
+
+Removes `gscli-*` skills and the rules section from each agent, and deletes `.gscli.json` on a local uninstall.
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--agent <id>` | – | Limit to one agent id |
+| `--scope <local\|global\|both>` | `local` | Where to remove from |
+| `-y, --yes` | – | Skip confirmations |
+
+### `gscli doctor` — health check
+
+Validates Chrome binary, `agent-browser` on PATH, CDP reachability, profile dir, history file, and log dir. Exits non-zero on any failure. Run it first whenever a search misbehaves.
+
+### Misc
+
+```bash
 gscli --version
-gscli --help
+gscli --help          # full command + flag reference (same surface as this README)
 ```
 
 ---
 
 ## Output
+
+### Regular SERP
 
 ```json
 {
@@ -194,9 +232,111 @@ gscli --help
 }
 ```
 
-`--merge-history` adds `sources: [query1, query2, …]` on each link so you can trace where every URL came from.
+Sponsored results are filtered out (EN/PT/ES/FR ad labels).
 
-**Exit codes:** `0` ok · `1` error · `2` blocked (CAPTCHA / unusual traffic) · `3` inconclusive (zero links).
+### AI Mode (`--ai`, with `-c -f` for multi-turn)
+
+```json
+{
+  "status": "ok",
+  "mode": "ai-mode",
+  "conversation": true,
+  "query": "what is python",
+  "title": "…",
+  "port": 9222,
+  "turns": [
+    { "question": "what is python", "answer": "…" },
+    { "question": "give code examples", "answer": "…" }
+  ],
+  "aiContent": "…(first answer)…",
+  "timestamp": "2026-05-16T…Z"
+}
+```
+
+Follow-ups are typed into the **inline AI Mode input**, so the conversation stays on screen like a chat. If a locale/account doesn't render the inline box, `gscli` transparently falls back to per-query URL navigation (logged to stderr; the thread resets but every answer is still in `turns`).
+
+### `--merge-history`
+
+```json
+{
+  "status": "ok",
+  "mode": "merge-history",
+  "mergedFrom": [{ "ts": "…", "query": "…" }],
+  "links": [
+    { "position": 1, "title": "…", "url": "…", "snippet": "…",
+      "sources": ["query A", "query B"] }
+  ]
+}
+```
+
+`sources` traces which past searches surfaced each URL.
+
+### Exit codes
+
+`0` ok · `1` error · `2` blocked (CAPTCHA / unusual traffic / unresolved consent) · `3` inconclusive (zero links / empty AI answer). With `--retry`, codes `1/2/3` trigger a backed-off retry.
+
+---
+
+## Locale Support
+
+The UI language is derived from the `?hl=` param of `--google-url` (default `pt-BR`). It drives which labels `gscli` looks for: the search box, the **AI Mode** button, the "new conversation" affordance, the consent **accept** button, and the inline follow-up input.
+
+| Locale | `--google-url` | AI Mode button |
+|--------|----------------|----------------|
+| pt-BR (default) | `?hl=pt-BR` | "Modo IA" |
+| en-US | `?hl=en-US` | "AI Mode" |
+| es-ES | `?hl=es-ES` | "Modo de IA" |
+| fr-FR | `?hl=fr-FR` | "Mode IA" |
+
+```bash
+gscli "what is rust" --ai --google-url "https://www.google.com/?hl=en-US"
+```
+
+A bare prefix (`?hl=en`, `?hl=pt`) maps to the closest supported locale; unknown locales fall back to pt-BR.
+
+---
+
+## Consent / Cookie Walls
+
+On a fresh profile or new region Google can interpose a consent wall (`consent.google.com` or an in-page banner) that blocks the search box. `gscli` detects it (URL or snapshot), clicks the locale-appropriate accept button, confirms it actually cleared (URL **and** banner re-check), and continues. An unresolved consent wall surfaces as `blocked` (exit 2) rather than a silent empty result.
+
+---
+
+## Concurrency
+
+Every run takes an exclusive lock per CDP port (`$TMPDIR/google-search-script-<port>.lock`). Without it, parallel runs on the same Chrome interleave keystrokes character-by-character (real bug — we have the scrambled logs). The lock auto-releases on exit / SIGINT / SIGTERM and reaps stale holders after 10 min or when the holder PID dies. `--no-lock` is **UNSAFE** unless you serialize externally.
+
+For true parallelism, run separate Chrome instances on distinct ports + profiles:
+
+```bash
+gscli setup --port 9223 --profile-dir ~/.gscli/profile-b
+gscli "q" --port 9223 --profile-dir ~/.gscli/profile-b
+```
+
+---
+
+## Use Cases
+
+### LLM agent search tool
+Replace `WebSearch` / `WebFetch`. The agent gets logged-in, AI-Mode-aware results plus a persistent JSONL trail. Wire it with `gscli init`; the installed skills tell the agent when and how to call it.
+
+### Multi-turn AI research (chat)
+`gscli "topic" --ai -c -f "narrow to X" -f "now compare with Y"` keeps a real on-screen conversation thread; the JSON `turns[]` array has every Q&A. Restate key context in a follow-up when it depends on an earlier answer — thread memory isn't guaranteed across every locale/account.
+
+### Continuous research across days
+Every result lands in `searches.jsonl`. `gscli --merge-history --merge-limit 20 --merge-ttl 604800` yields a deduped union of links from the last week with per-URL source attribution — **no browser**.
+
+### Cheap repeats / cost control
+`gscli "<q>" --use-cache --cache-ttl 3600` returns a recent identical query from history without opening Chrome. Add `--no-history` for one-off/sensitive queries that shouldn't pollute the JSONL.
+
+### Headless data pipelines
+`gscli "<q>" --format ndjson` → pipe into a `jq` filter → fetcher. Structured datasets without a manual browser. Exit codes make failures scriptable; `--retry` smooths transient blocks.
+
+### Reproducible citations
+Every search is timestamped + status-tagged in JSONL. "What did Google say about X last Tuesday" is a `jq` query away (see the `gscli-history` skill for recipes).
+
+### Multi-locale / international queries
+`--google-url "...?hl=<locale>"` runs the whole flow (search box, AI Mode, consent) in pt-BR / en-US / es-ES / fr-FR.
 
 ---
 
@@ -208,63 +348,39 @@ gscli --help
 | Chrome profile | `~/.gscli/chrome-profile` | `CHROME_DEBUG_DIR` |
 | Search history | `~/.gscli/history/searches.jsonl` | `SEARCH_HISTORY_FILE` |
 | Chrome launch logs | `$TMPDIR/gscli/chrome-<port>.log` | `START_LOG_DIR` |
-| Per-port lock | `$TMPDIR/google-search-script-<port>.lock` | — |
+| SERP snapshot (debug) | `$TMPDIR/gscli/google-search-snapshot.log` | – |
+| Per-port lock | `$TMPDIR/google-search-script-<port>.lock` | – |
 | CDP port | `9222` | `CDP_PORT` |
 | Chrome binary | `/Applications/Google Chrome.app/…` | `CHROME_BIN` |
 | agent-browser bin | `agent-browser` (PATH) | `AGENT_BROWSER_BIN` |
+| Default query | – | `SEARCH_QUERY` |
+| AI Mode default | off | `AI_MODE=true` |
+| Retry default | off | `SEARCH_RETRY=true` |
 
-All env vars resolve at process start. Pass equivalent flags to override on a single run.
-
----
-
-## Common Workflow
-
-1. **Install** — `./install.sh --local` (one time per machine; signs into Google at the end).
-2. **Wire a project** — `cd ~/code/my-project && gscli init` (one time per project, or once globally with `--global`).
-3. **Agent runs searches** — the agent invokes `gscli "<query>"`, parses the JSON, and feeds URLs into whatever follow-up step it needs.
-4. **Cache hits and merges** are free — `--use-cache` for repeats, `--merge-history` for cross-query unions.
-5. **When something feels off** — `gscli doctor` validates Chrome, agent-browser, CDP, paths.
-6. **Read the raw history** — `~/.gscli/history/searches.jsonl` is plain JSONL, safe to `grep` / `jq`.
-
----
-
-## Use Cases
-
-### LLM Agent Tools
-Replace `WebSearch` / `WebFetch` with `gscli` so the agent gets logged-in, AI-Mode-aware results plus a persistent JSONL trail of every query it ran.
-
-### Continuous Research
-Searching the same topic across days. Every result lands in `searches.jsonl`. `gscli --merge-history --merge-limit 20 --merge-ttl 604800` produces a deduped union of links from the last week, with source attribution per URL.
-
-### Headless Data Pipelines
-Pipe `gscli "<query>" --format ndjson` into a downstream extractor; chain with `jq` and a fetcher; emit structured datasets without a manual browser.
-
-### Reproducible Citations
-Every search is timestamped, status-tagged, and persisted. Going back to "what did Google say about X last Tuesday" is a `jq` away.
-
-### Multi-Turn AI Mode
-Use `--ai -c -f "…" -f "…"` for chained AI Mode queries. Because Google's `udm=50` has no inline follow-up box, each turn restates context in the follow-up text — `gscli` handles the URL shaping for you.
+Env vars resolve at process start; equivalent flags override per run.
 
 ---
 
 ## Tips & Tricks
 
-- **History is JSONL** — `tail -n 20 ~/.gscli/history/searches.jsonl | jq -r .query` shows recent queries. `jq -c 'select(.mode == "ai-mode")'` filters to AI Mode runs.
-- **Headless? No.** This runs a visible Chrome by design — anti-bot heuristics treat headless mode differently. The window can be backgrounded but not killed during a search.
-- **Two parallel runs on the same Chrome will interleave keystrokes** if you bypass the lock (`--no-lock`). Don't, unless you serialize externally.
-- **AI Mode follow-ups need context** — `udm=50` does not render an inline input, so each `-f` becomes a fresh `?q=…&udm=50` URL. Always restate the topic.
-- **`--use-cache` is silent on miss** — it falls through to a live search. Combine with `--no-history` if you want a one-off query that doesn't pollute the JSONL.
-- **CAPTCHA?** Status will be `blocked` (exit 2). Open the debug Chrome window, solve it manually, re-run. Don't auto-retry on `2`.
+- **Inspect failures** — the last SERP/AI snapshot is at `$TMPDIR/gscli/google-search-snapshot.log`; Chrome launch logs at `$TMPDIR/gscli/chrome-<port>.log`.
+- **Warm path** — repeated `--ai` calls in the same session reuse the open AI Mode page (skips the google.com → type → click-button dance, ~10-13 s faster). Watch stderr for `warm-path`.
+- **Headless? No.** Visible Chrome by design — anti-bot treats headless differently. The window can be backgrounded but not killed mid-search.
+- **CAPTCHA / unusual traffic** → `blocked` (exit 2). Solve it in the debug window, re-run. Don't auto-retry on `2` blindly.
+- **`--use-cache` is silent on miss** — falls through to a live search.
+- **`-c` without `-f` does nothing** — follow-ups need both.
+- **History is JSONL** — `tail -n 20 ~/.gscli/history/searches.jsonl | jq -r .query`; `jq -c 'select(.mode=="ai-mode")'` filters AI Mode runs.
 
 ---
 
 ## Mental Model
 
-- **One install per machine.** Code in `~/.gscli/`, profile in `~/.gscli/chrome-profile/`, history in `~/.gscli/history/`. Re-running `install.sh` never wipes your data.
-- **One Chrome debug window per CDP port.** The default port (`9222`) is fine for almost everyone; pass `--port` if you need parallel sessions with distinct profiles.
-- **The per-port mutex is the safety net.** Without it, parallel runs garble each other's keystrokes. The lock auto-releases on exit / SIGINT / SIGTERM, and reaps stale holders after 10 min or when the PID dies.
-- **History is append-only.** `--use-cache` and `--merge-history` depend on this — never edit the file by hand.
-- **All commands work from any directory.** Defaults are derived from `GSCLI_HOME`, not the CWD.
+- **One install per machine.** Code + profile + history under `~/.gscli/`. Re-running `install.sh` never wipes user data (profile/history excluded from sync).
+- **One Chrome debug window per CDP port.** Default `9222`; use `--port` + `--profile-dir` for parallel isolated sessions.
+- **The per-port mutex is the safety net.** It prevents keystroke interleaving and self-reaps.
+- **History is append-only.** `--use-cache` and `--merge-history` depend on its ordering — never hand-edit it.
+- **Locale is a URL concern.** Everything keys off `--google-url ?hl=`.
+- **All commands work from any directory.** Defaults derive from `GSCLI_HOME`, not the CWD.
 
 Everything is plain TypeScript + Markdown + JSONL in a git repo. No databases, no daemons, no proxies.
 
@@ -276,10 +392,10 @@ Everything is plain TypeScript + Markdown + JSONL in a git repo. No databases, n
 npm install
 npm run dev -- "test query"   # tsx, no build
 npm run build                 # tsc → dist/
-npm test                      # vitest
+npm test                      # vitest (54 tests)
 ```
 
-CI runs `build` + `test` on Node 20 and 22 for every push and PR.
+CI runs `build` + `test` on Node 20 and 22 for every push and PR. See `AGENTS.md` / `CLAUDE.md` for contributor conventions.
 
 ## License
 
