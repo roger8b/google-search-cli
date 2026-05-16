@@ -5,7 +5,14 @@ description: Use this skill when the user explicitly asks to search Google, look
 
 # gscli-search
 
-`gscli` is the user's Google search CLI. It drives a logged-in Chrome via CDP and returns structured SERP results.
+`gscli` is the user's Google search CLI. It drives a logged-in Chrome via CDP and returns structured SERP / AI Mode results.
+
+## Prerequisite (one-time, human action)
+
+`gscli` needs a logged-in Chrome profile created by `gscli setup`. If a search
+fails because Chrome/CDP is unreachable, **do not try to fix it yourself** — tell
+the user to run `gscli setup` once (it opens a Chrome window for Google login)
+and `gscli doctor` to verify. You only run the `search` command.
 
 ## When to use
 
@@ -27,7 +34,7 @@ gscli "<query>"
 
 Returns JSON: `{ status, query, title, links: [{ position, title, url, snippet }] }`.
 
-Exit codes: `0` ok · `1` error · `2` blocked (CAPTCHA) · `3` inconclusive (zero links).
+Exit codes: `0` ok · `1` error · `2` blocked (CAPTCHA / unusual traffic / unresolved consent wall) · `3` inconclusive (zero links / empty AI answer).
 
 ## Useful flags
 
@@ -39,7 +46,7 @@ Exit codes: `0` ok · `1` error · `2` blocked (CAPTCHA) · `3` inconclusive (ze
 | `--retry` | Retry on timeout/blocked/inconclusive (exponential backoff, max 2 by default) |
 | `--use-cache` | Skip browser if same query within TTL (see `gscli-history`) |
 | `--format ndjson` | One result per line (pipe-friendly) |
-| `--google-url ...&hl=<locale>` | Force UI locale (pt-BR default; en-US, es-ES, fr-FR supported) |
+| `--google-url "https://www.google.com/?hl=<locale>"` | Force UI locale (pt-BR default; en-US, es-ES, fr-FR) |
 
 ## AI Mode multi-turn (chat)
 
