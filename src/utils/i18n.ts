@@ -13,6 +13,13 @@ export interface LocaleLabels {
   newThreadButton: string[];
   /** Visible text of the consent "accept" button. */
   consentAccept: string[];
+  /**
+   * Case-insensitive substrings that appear in the accessible name /
+   * placeholder of the inline AI Mode follow-up input. Used to keep a
+   * multi-turn conversation on the same page (chat-like) instead of
+   * navigating to a fresh URL and losing the visible thread.
+   */
+  followUpInput: string[];
 }
 
 const LABELS: Record<string, LocaleLabels> = {
@@ -21,24 +28,28 @@ const LABELS: Record<string, LocaleLabels> = {
     aiModeButton: 'Modo IA',
     newThreadButton: ['Nova conversa', 'Novo chat', 'Limpar'],
     consentAccept: ['Aceitar tudo', 'Aceito', 'Concordo'],
+    followUpInput: ['pergunt', 'acompanhamento', 'modo ia', 'mais alguma'],
   },
   'en-US': {
     searchbox: ['Search', 'Pesquisar'],
     aiModeButton: 'AI Mode',
     newThreadButton: ['New conversation', 'New chat', 'Clear'],
     consentAccept: ['Accept all', 'I agree', 'Accept'],
+    followUpInput: ['ask', 'follow-up', 'follow up', 'anything'],
   },
   'es-ES': {
     searchbox: ['Buscar', 'Search'],
     aiModeButton: 'Modo de IA',
     newThreadButton: ['Nueva conversación', 'Nuevo chat', 'Borrar'],
     consentAccept: ['Aceptar todo', 'Acepto'],
+    followUpInput: ['pregunt', 'seguimiento', 'algo más'],
   },
   'fr-FR': {
     searchbox: ['Rechercher', 'Search'],
     aiModeButton: 'Mode IA',
     newThreadButton: ['Nouvelle conversation', 'Effacer'],
     consentAccept: ['Tout accepter', "J'accepte"],
+    followUpInput: ['poser', 'question', 'suivi'],
   },
 };
 

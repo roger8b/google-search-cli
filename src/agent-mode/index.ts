@@ -3,9 +3,9 @@
 
 import { Config } from '../config/index.js';
 import { runAgentBrowser, runMaybe } from '../browser/agent.js';
-import { humanType } from '../human/index.js';
+import { humanType, humanClick } from '../human/index.js';
 import { sleep } from '../human/utils.js';
-import { waitForLoad, findSearchBoxInSnapshot } from '../search/snapshot.js';
+import { waitForLoad, findSearchBoxInSnapshot, clearSearchBox } from '../search/snapshot.js';
 import { getCurrentUrl } from '../search/consent.js';
 import { getLabels } from '../utils/i18n.js';
 
@@ -93,19 +93,69 @@ export async function performAiSearch(config: Config): Promise<void> {
 }
 
 /**
- * Follow-up question. AI Mode (udm=50) does not reliably render an inline
- * follow-up textbox for every locale/account, so we navigate to a fresh
- * `?q=…&udm=50` URL. The Google session cookie carries history server-side.
+ * Scans the accessibility snapshot for the inline AI Mode follow-up input
+ * (a textbox/combobox whose accessible name matches a locale follow-up
+ * placeholder). Returns its ref or null.
+ */
+export function findFollowUpInputRef(snapshot: string, hints: string[]): string | null {
+  const lines = snapshot.split(/\r?\n/);
+  for (const line of lines) {
+    const m = line.match(/(?:textbox|combobox|searchbox|textarea)\s+"([^"]+)"\s*\[ref=(e\d+)\]/i);
+    if (!m) continue;
+    const name = m[1].toLowerCase();
+    if (hints.some((h) => name.includes(h.toLowerCase()))) {
+      return m[2];
+    }
+  }
+  return null;
+}
+
+/**
+ * Follow-up question.
+ *
+ * Preferred (chat-like): type into the inline AI Mode follow-up input so the
+ * thread stays on screen and prior turns remain visible — same behavior the
+ * user expects from a chat UI.
+ *
+ * Fallback: if no inline input can be located (some locales/accounts do not
+ * render it), navigate to a fresh `?q=…&udm=50` URL. The Google session cookie
+ * still carries history server-side, but the visible thread is reset.
  */
 export async function performFollowUp(config: Config, query: string): Promise<void> {
-  log(`follow-up via URL navigation: ${query}`);
+  const bin = config.agentBrowserBin;
+  const port = config.port;
+  const labels = getLabels(config.googleUrl);
+
+  const snapshot = runMaybe(bin, ['--cdp', String(port), 'snapshot', '-i'], port);
+  const inlineRef = findFollowUpInputRef(snapshot, labels.followUpInput);
+
+  if (inlineRef) {
+    log(`inline follow-up via input ${inlineRef} (thread preserved)`);
+    await humanClick(bin, port, inlineRef);
+    clearSearchBox(bin, port, inlineRef);
+
+    // Re-resolve in case the DOM shifted after focusing.
+    let typingRef = inlineRef;
+    try {
+      const fresh = runMaybe(bin, ['--cdp', String(port), 'snapshot', '-i'], port);
+      typingRef = findFollowUpInputRef(fresh, labels.followUpInput) ?? inlineRef;
+    } catch {
+      /* keep inlineRef */
+    }
+
+    await humanType(bin, port, query, typingRef, config);
+    runAgentBrowser(bin, ['--cdp', String(port), 'press', 'Enter'], port);
+    log('waiting for follow-up response…');
+    waitForLoad(bin, port);
+    return;
+  }
+
+  log('inline follow-up input not found — falling back to URL navigation (thread resets)');
   const locale = localeParam(config.googleUrl);
   const url = `${stripQuery(config.googleUrl)}/search?q=${encodeURIComponent(query)}${locale}&udm=50`;
-  runAgentBrowser(config.agentBrowserBin, ['--cdp', String(config.port), 'open', url], config.port, {
-    allowFailure: true,
-  });
+  runAgentBrowser(bin, ['--cdp', String(port), 'open', url], port, { allowFailure: true });
   log('waiting for follow-up response…');
-  waitForLoad(config.agentBrowserBin, config.port);
+  waitForLoad(bin, port);
 }
 
 function localeParam(googleUrl: string): string {
@@ -194,6 +244,22 @@ export function getAiResponse(agentBrowserBin: string, port: number, query: stri
             }
           }
         }
+      }
+
+      // Multi-turn: the newest answer is the LAST completed block in the
+      // thread. Prefer the last substantial [data-complete="true"] element so
+      // a follow-up returns its own answer, not the whole concatenated thread.
+      const completeEls = Array.from(document.querySelectorAll('[data-complete="true"]'))
+        .filter((el) => {
+          const t = (el.innerText || '').trim();
+          if (!t || t.length < 200) return false;
+          if (/data:image|_setImageSrc|window\\.jsl|jsaction=/.test(t)) return false;
+          return true;
+        });
+      if (completeEls.length > 0) {
+        const last = completeEls[completeEls.length - 1];
+        const t = (last.innerText || '').trim();
+        if (t.length > 200) return t;
       }
 
       const containerSelectors = [
